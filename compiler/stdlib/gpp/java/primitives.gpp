@@ -36,6 +36,15 @@ func IntFromDouble(value float64) int32 {
 
 // DoubleString returns the decimal representation specified by Java SE 27 Double.toString.
 func DoubleString(value float64) string {
+    return floatingString(value, 64)
+}
+
+// FloatString formats the original single-precision number.
+func FloatString(value float32) string {
+    return floatingString(float64(value), 32)
+}
+
+func floatingString(value float64, width int) string {
     if math.IsNaN(value) {
         return "NaN"
     }
@@ -46,11 +55,11 @@ func DoubleString(value float64) string {
         return "-Infinity"
     }
 
-    scientific := strconv.FormatFloat(value, 'e', -1, 64)
+    scientific := strconv.FormatFloat(value, 'e', -1, width)
     mantissa, exponentText, _ := strings.Cut(scientific, "e")
     exponent, _ := strconv.Atoi(exponentText)
     if exponent >= -3 && exponent < 7 {
-        decimal := strconv.FormatFloat(value, 'f', -1, 64)
+        decimal := strconv.FormatFloat(value, 'f', -1, width)
         if !strings.Contains(decimal, ".") {
             decimal += ".0"
         }
@@ -60,8 +69,8 @@ func DoubleString(value float64) string {
     // When a single digit round-trips, Java also considers the closest
     // two-digit decimal. This matters for values such as Double.MIN_VALUE.
     if !strings.Contains(mantissa, ".") {
-        candidate := strconv.FormatFloat(value, 'e', 1, 64)
-        parsed, err := strconv.ParseFloat(candidate, 64)
+        candidate := strconv.FormatFloat(value, 'e', 1, width)
+        parsed, err := strconv.ParseFloat(candidate, width)
         if err == nil && parsed == value {
             mantissa, exponentText, _ = strings.Cut(candidate, "e")
             exponent, _ = strconv.Atoi(exponentText)

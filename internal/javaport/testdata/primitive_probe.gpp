@@ -15,8 +15,9 @@ func main() {
     for input.Scan() {
         bits := strconv.ParseUint(input.Text(), 16, 64)
         value := math.Float64frombits(bits)
-        fmt.Printf("%016x %d %d %s\n", bits,
-            java.IntFromDouble(value), java.LongFromDouble(value), java.DoubleString(value))
+        single := math.Float32frombits(uint32(bits))
+        fmt.Printf("%016x %d %d %s %s\n", bits,
+            java.IntFromDouble(value), java.LongFromDouble(value), java.DoubleString(value), java.FloatString(single))
     }
     if err := input.Err(); err != nil {
         panic(err)

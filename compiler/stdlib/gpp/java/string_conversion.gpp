@@ -1,0 +1,51 @@
+package gpp.java
+
+import (
+    "fmt"
+    "math"
+)
+
+// ConcatStringValue performs a runtime Java concatenation. Both values
+// preserve their original UTF-16 code units, including isolated surrogates.
+func ConcatStringValue(left *String, right any) *String {
+    prefix, suffix := stringConversion(left), stringConversion(right)
+    if len(prefix)/2 > math.MaxInt32-len(suffix)/2 || len(prefix) > math.MaxInt-len(suffix) {
+        panic("Java String exceeds the maximum representable length")
+    }
+    return &String{encoded: prefix + suffix}
+}
+
+func stringConversion(value any) string {
+    if isNullReference(value) {
+        return "\x6e\x00\x75\x00\x6c\x00\x6c\x00"
+    }
+    switch converted := value.(type) {
+    case *String:
+        return converted.encoded
+    case uint16:
+        return string([]byte{byte(converted), byte(converted >> 8)})
+    case bool, int8, int16, int32, int64:
+        return StringFromGo(fmt.Sprint(value)).encoded
+    case float32:
+        return StringFromGo(FloatString(converted)).encoded
+    case float64:
+        return StringFromGo(DoubleString(converted)).encoded
+    case *Boolean:
+        return stringConversion(converted.value)
+    case *Byte:
+        return stringConversion(converted.value)
+    case *Short:
+        return stringConversion(converted.value)
+    case *Character:
+        return stringConversion(converted.value)
+    case *Integer:
+        return stringConversion(converted.value)
+    case *Long:
+        return stringConversion(converted.value)
+    case *Float:
+        return stringConversion(converted.value)
+    case *Double:
+        return stringConversion(converted.value)
+    }
+    panic("unsupported operand for Java string conversion")
+}

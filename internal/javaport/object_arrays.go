@@ -136,11 +136,8 @@ func (ctx javaObjectContext) arrayAccess(expression *JavaExpression) (string, er
 		ctx.program.objectGoType(component), value, index, ctx.arrayGet("javaArray", "javaIndex", component)), nil
 }
 
-func arrayAssignmentTarget(expression *JavaExpression) *JavaExpression {
-	if expression == nil || expression.Kind != "ASSIGNMENT" {
-		return nil
-	}
-	for target := expression.Left; target != nil; target = target.Operand {
+func arrayMutationTarget(target *JavaExpression) *JavaExpression {
+	for ; target != nil; target = target.Operand {
 		if target.Kind == "ARRAY_ACCESS" {
 			return target
 		}

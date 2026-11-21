@@ -10,8 +10,9 @@ class JavaPrimitiveProbe {
             while ((line = input.readLine()) != null) {
                 long bits = Long.parseUnsignedLong(line, 16);
                 double value = Double.longBitsToDouble(bits);
-                System.out.printf(Locale.ROOT, "%016x %d %d %s%n",
-                    bits, (int) value, (long) value, Double.toString(value));
+                String single = Float.toString(Float.intBitsToFloat((int) bits));
+                System.out.printf(Locale.ROOT, "%016x %d %d %s %s%n",
+                    bits, (int) value, (long) value, Double.toString(value), single);
             }
         }
     }

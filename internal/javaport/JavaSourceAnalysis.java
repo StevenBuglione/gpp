@@ -6,6 +6,7 @@ import com.sun.source.tree.BreakTree;
 import com.sun.source.tree.CatchTree;
 import com.sun.source.tree.ClassTree;
 import com.sun.source.tree.CompilationUnitTree;
+import com.sun.source.tree.CompoundAssignmentTree;
 import com.sun.source.tree.ConditionalExpressionTree;
 import com.sun.source.tree.ContinueTree;
 import com.sun.source.tree.DoWhileLoopTree;
@@ -439,6 +440,9 @@ class JavaSourceAnalysis {
                 attributes += ",\"target\":" + executableExpression(new TreePath(path, access.getExpression())) +
                     ",\"operand\":" + executableExpression(new TreePath(path, access.getIndex()));
             } else if (tree instanceof AssignmentTree assignment) {
+                attributes += ",\"left\":" + executableExpression(new TreePath(path, assignment.getVariable())) +
+                    ",\"right\":" + executableExpression(new TreePath(path, assignment.getExpression()));
+            } else if (tree instanceof CompoundAssignmentTree assignment) {
                 attributes += ",\"left\":" + executableExpression(new TreePath(path, assignment.getVariable())) +
                     ",\"right\":" + executableExpression(new TreePath(path, assignment.getExpression()));
             } else if (tree instanceof TypeCastTree cast) {

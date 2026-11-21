@@ -77,6 +77,11 @@ func primitiveProbeInput() []byte {
 			fmt.Fprintf(&input, "%016x\n", exponent<<52|fraction)
 		}
 	}
+	for exponent := range uint64(255) {
+		for _, fraction := range []uint64{0, 1, 2, (1 << 22) - 1, (1 << 23) - 1} {
+			fmt.Fprintf(&input, "%016x\n", exponent<<23|fraction)
+		}
+	}
 	for exponent := -323; exponent <= 308; exponent++ {
 		power := math.Pow10(exponent)
 		for _, value := range []float64{math.Nextafter(power, 0), power, math.Nextafter(power, math.Inf(1))} {

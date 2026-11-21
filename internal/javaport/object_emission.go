@@ -330,7 +330,10 @@ func (ctx javaObjectContext) statement(statement JavaStatement, result string) (
 		case "ASSIGNMENT":
 			return ctx.assignment(expression, false)
 		case "PREFIX_INCREMENT", "PREFIX_DECREMENT", "POSTFIX_INCREMENT", "POSTFIX_DECREMENT":
-			return ctx.increment(expression, false)
+			return ctx.increment(expression)
+		}
+		if operator, compound := javaCompoundOperators[expression.Kind]; compound {
+			return ctx.updateVariable(expression.Left, expression.Right, operator, false)
 		}
 	}
 	return "", fmt.Errorf("unsupported statement %s", statement.Kind)
@@ -411,7 +414,7 @@ func (ctx javaObjectContext) expression(expression *JavaExpression) (string, err
 	case "ASSIGNMENT":
 		return ctx.assignment(expression, true)
 	case "PREFIX_INCREMENT", "PREFIX_DECREMENT", "POSTFIX_INCREMENT", "POSTFIX_DECREMENT":
-		return ctx.increment(expression, true)
+		return ctx.increment(expression)
 	case "UNARY_PLUS", "UNARY_MINUS", "BITWISE_COMPLEMENT", "LOGICAL_COMPLEMENT":
 		return ctx.program.primitiveLowering.unary(expression, ctx.expression)
 	case "LEFT_SHIFT", "RIGHT_SHIFT", "UNSIGNED_RIGHT_SHIFT":
@@ -419,6 +422,9 @@ func (ctx javaObjectContext) expression(expression *JavaExpression) (string, err
 	case "BOOLEAN_LITERAL", "CHAR_LITERAL", "INT_LITERAL", "LONG_LITERAL", "FLOAT_LITERAL", "DOUBLE_LITERAL":
 		return ctx.program.primitiveLowering.literal(expression.Type, expression.Literal)
 	default:
+		if operator, compound := javaCompoundOperators[expression.Kind]; compound {
+			return ctx.updateVariable(expression.Left, expression.Right, operator, false)
+		}
 		if _, binary := javaPrimitiveOperators[expression.Kind]; binary {
 			return ctx.program.primitiveLowering.binary(expression, ctx.expression)
 		}
