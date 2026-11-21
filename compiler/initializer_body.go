@@ -87,7 +87,14 @@ func lowerExplicitInitializerStatement(expression ExprNode, context constructorC
 				Arguments: arguments,
 				SpanValue: call.Span(),
 			}
-			body.Statements = append(body.Statements, forwardInitializerFailure(invocation, context))
+			if parent.noError {
+				body.Statements = append(body.Statements, &ExpressionStmt{Expression: invocation})
+			} else {
+				body.Statements = append(body.Statements, forwardInitializerFailure(invocation, context))
+			}
+		}
+		if context.RunInstanceInitializers {
+			body.Statements = append(body.Statements, instanceInitializerCall(context))
 		}
 		return body, true, nil
 	}

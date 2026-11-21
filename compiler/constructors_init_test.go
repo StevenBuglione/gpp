@@ -526,6 +526,7 @@ class Parent {
     Inherited int
     func init(input int) {}
 }
+
 class Child : Parent {
     value int
     func init(input int) {
@@ -554,6 +555,33 @@ class Child : Parent {
 			_, err = ResolveProgram(&Program{Files: []*File{file}})
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("expected initializer diagnostic containing %q, got %v", test.want, err)
+			}
+		})
+	}
+}
+
+func TestResolveProgramValidatesInstanceInitializerReferences(t *testing.T) {
+	cases := []struct {
+		name   string
+		source string
+		want   string
+	}{
+		{"field_forward_reference", "class Example { first int = second; second int = 8 }", "illegal forward reference to instance field second"},
+		{"field_self_reference", "class Example { first int = first }", "illegal forward reference to instance field first"},
+		{"block_forward_reference", "class Example { { _ = second }; second int = 8 }", "illegal forward reference to instance field second"},
+		{"block_early_return", "class Example { { if true { return } } }", "return is invalid in an instance initializer"},
+		{"block_constructor_call", "class Example { { this() }; func init() {} }", "constructor invocation belongs in an init method"},
+		{"private_parent_field", "class Parent { secret int }\nclass Child : Parent { value int = this.Parent.secret }", "cannot access private inherited member secret"},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			file, err := ParseFile("instance.gpp", "package main\n"+test.source+"\n")
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = ResolveProgram(&Program{Files: []*File{file}})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("expected instance initializer diagnostic containing %q, got %v", test.want, err)
 			}
 		})
 	}

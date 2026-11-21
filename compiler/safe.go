@@ -22,6 +22,9 @@ func fileHasSafeAccess(file *File) bool {
 				return true
 			}
 		case *ClassDecl:
+			if tokenSequence(instanceInitializerTokens(value), "?.") {
+				return true
+			}
 			for _, method := range value.Methods {
 				if tokenSequence(methodBodyTokens(method), "?.") {
 					return true

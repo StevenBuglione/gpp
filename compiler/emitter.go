@@ -168,6 +168,7 @@ type constructorContext struct {
 	InlineParentInitializers   []initializerParentCall
 	InitializerFailureOutput   bool
 	InitializerDelegationTypes map[string]string
+	RunInstanceInitializers    bool
 	DeferConstructorLowering   bool
 	CurrentResultAST           TypeNode
 	CurrentExtensionReceiver   string
@@ -375,17 +376,16 @@ func emitFile(file *File, context constructorContext) ([]byte, error) {
 		body = prependPreludeImports(body, preludeImportsForBody(preludeBody, context.PreludeImports))
 		body = insertAfterImports(body, preludeBody)
 	}
+	if needsFmtImport {
+		body = insertAfterImports(body, "import \"fmt\"\n\n")
+	}
 
 	localRuntimeDefinitions := ""
 	localRuntimeImports := ""
 	if context.Introspection != nil && context.IntrospectionRuntimeImport == "" &&
 		(len(context.Introspection.Classes) > 0 || len(context.Annotations) > 0 || fileUsesIntrospection(file)) &&
 		!context.Introspection.RuntimeEmitted {
-		runtimeImportBody := body
-		if needsFmtImport {
-			runtimeImportBody = "import \"fmt\"\n\n" + runtimeImportBody
-		}
-		fmtAlias, reflectAlias, strconvAlias, stringsAlias, imports := defaultObjectRuntimeImports(runtimeImportBody)
+		fmtAlias, reflectAlias, strconvAlias, stringsAlias, imports := defaultObjectRuntimeImports(body)
 		localRuntimeImports = imports
 		localRuntimeDefinitions = introspectionRuntimeDefinitionsWithAliases(
 			fmtAlias,
@@ -414,9 +414,6 @@ func emitFile(file *File, context constructorContext) ([]byte, error) {
 		}
 		declarationsPrefix += exceptionRuntimeSourceMarker + "\n" + exceptionRuntimeDefinitions(raise, unwrap)
 		context.Exceptions.RuntimeEmitted = true
-	}
-	if needsFmtImport {
-		declarationsPrefix += "import \"fmt\"\n\n"
 	}
 	if fileHasSafeAccess(file) {
 		declarationsPrefix += "func __gpp_safe[R any](isNil bool, access func() R) R {\n"
@@ -1948,8 +1945,21 @@ func emitClass(out *strings.Builder, file *File, class *ClassDecl, context const
 	for _, initializer := range classInitializers(class) {
 		methods = append(methods, *initializer)
 	}
+	hasInstanceBody := hasInstanceInitializers(class)
+	if hasInstanceBody {
+		body, err := buildInstanceInitializerMethod(class)
+		if err != nil {
+			return err
+		}
+		if err := validateHookCallsFromMethod(class, &body, classes); err != nil {
+			return err
+		}
+		methods = append(methods, body)
+	}
 	initializerParents := make(map[string][]initializerParentCall)
 	failureOutputs := make(map[string]bool)
+	delegatingInitializers := make(map[string]bool)
+	instanceErrors := false
 	for _, initializer := range classInitializers(class) {
 		name := methodOutputName(*initializer)
 		parentCalls, err := initializerParentCalls(class, *initializer, classes, context)
@@ -1958,8 +1968,10 @@ func emitClass(out *strings.Builder, file *File, class *ClassDecl, context const
 		}
 		initializerParents[name] = parentCalls
 		hasInline := len(parentCalls) != 0 && parentCalls[0].inline
-		failureOutputs[name] = strings.TrimSpace(methodResultSource(*initializer)) == "" &&
-			(hasInline || initializerDelegationCall(*initializer) != nil)
+		acceptsError := strings.TrimSpace(methodResultSource(*initializer)) == "error"
+		instanceErrors = instanceErrors || acceptsError
+		delegatingInitializers[name] = initializerDelegationCall(*initializer) != nil
+		failureOutputs[name] = !acceptsError && (hasInline || delegatingInitializers[name])
 	}
 
 	for _, method := range class.Methods {
@@ -1998,6 +2010,7 @@ func emitClass(out *strings.Builder, file *File, class *ClassDecl, context const
 			}
 			if calls := initializerParents[methodName]; len(calls) != 0 && calls[0].inline {
 				exceptionContext.InlineParentInitializers = calls
+				exceptionContext.RunInstanceInitializers = hasInstanceBody
 			}
 			if failureOutputs[methodName] {
 				exceptionContext.InitializerFailureOutput = true
@@ -2144,7 +2157,8 @@ func emitClass(out *strings.Builder, file *File, class *ClassDecl, context const
 		methodName := methodOutputName(*initializer)
 		helperName := constructorInitializerHelperName(*initializer)
 		fmt.Fprintf(out, "func (this *%s) %s(%s) error {\n", class.Name+typeParameterNames(class.TypeParamsAST), helperName, parameters)
-		for _, parentCall := range initializerParents[methodName] {
+		parentCalls := initializerParents[methodName]
+		for _, parentCall := range parentCalls {
 			if parentCall.inline {
 				continue
 			}
@@ -2153,7 +2167,19 @@ func emitClass(out *strings.Builder, file *File, class *ClassDecl, context const
 				fields = append(fields, classParentFieldName(parent))
 			}
 			call := "this." + strings.Join(fields, ".") + "." + parentCall.helper + "(" + strings.Join(parentCall.arguments, ", ") + ")"
-			fmt.Fprintf(out, "\tif err := %s; err != nil { return err }\n", call)
+			if parentCall.noError {
+				fmt.Fprintf(out, "\t%s\n", call)
+			} else {
+				fmt.Fprintf(out, "\tif err := %s; err != nil { return err }\n", call)
+			}
+		}
+		inline := len(parentCalls) != 0 && parentCalls[0].inline
+		if hasInstanceBody && !inline && !delegatingInitializers[methodName] {
+			if strings.TrimSpace(methodResultSource(*initializer)) == "error" {
+				fmt.Fprintf(out, "\tif err := this.%s(); err != nil { return err }\n", instanceInitializerWithError)
+			} else {
+				fmt.Fprintf(out, "\tthis.%s()\n", instanceInitializerMethod)
+			}
 		}
 		if failureOutputs[methodName] {
 			bodyArguments := append([]string{"&failure"}, arguments...)
@@ -2164,6 +2190,9 @@ func emitClass(out *strings.Builder, file *File, class *ClassDecl, context const
 			fmt.Fprintf(out, "\treturn this.%s(%s)\n", methodName, strings.Join(arguments, ", "))
 		}
 		out.WriteString("}\n\n")
+	}
+	if hasInstanceBody {
+		emitInstanceInitializerMethods(out, class, instanceErrors)
 	}
 	if context.Introspection != nil && context.Introspection.Enabled {
 		emitDynamicObjectBinding(out, class)
@@ -2231,6 +2260,7 @@ type initializerParentCall struct {
 	helper    string
 	arguments []string
 	inline    bool
+	noError   bool
 }
 
 func initializerParentCalls(class *ClassDecl, initializer Method, classes map[string]*ClassDecl, context constructorContext) ([]initializerParentCall, error) {
@@ -2458,6 +2488,9 @@ func appendInheritedInitializerCalls(output *[]initializerParentCall, class *Cla
 			helper:    constructorInitializerHelperName(*selected),
 			arguments: arguments,
 		})
+	}
+	if hasInstanceInitializers(class) {
+		*output = append(*output, initializerParentCall{path: path, helper: instanceInitializerMethod, noError: true})
 	}
 	return nil
 }
@@ -4644,6 +4677,9 @@ func fileHasInterpolation(file *File) bool {
 				return true
 			}
 		case *ClassDecl:
+			if tokensNeedInterpolationLowering(instanceInitializerTokens(d)) {
+				return true
+			}
 			for _, method := range d.Methods {
 				if tokensNeedInterpolationLowering(methodBodyTokens(method)) {
 					return true
@@ -4674,6 +4710,9 @@ func fileHasInterpolationExpression(file *File) bool {
 		case *ValueDecl:
 			tokens = valueDeclTokens(value)
 		case *ClassDecl:
+			if tokensHaveInterpolation(instanceInitializerTokens(value)) {
+				return true
+			}
 			for _, method := range value.Methods {
 				if tokensHaveInterpolation(methodBodyTokens(method)) {
 					return true

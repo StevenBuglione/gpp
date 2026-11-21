@@ -267,6 +267,26 @@ The initializer overload itself is selected statically. A call on `this`
 to a public or protected instance method can dispatch to the derived
 implementation while the parent initializer runs.
 
+## Instance field initializers and blocks
+
+A field declaration may include an initializer expression after `=`. A
+standalone block in a class body is an instance initializer block. Field
+expressions and blocks execute in declaration order after the parent chain
+completes and before the selected constructor continues. They run once for
+the class when a constructor delegates with `this(...)`. A class with an
+implicit constructor also runs its instance initializers.
+
+A simple name in an instance initializer may read an earlier field. A
+qualified field read, such as `this.Later`, sees the value currently stored.
+Assignments can write fields declared later. Instance initializer blocks may
+throw but cannot use `return`, `this(...)`, or `super(...)`.
+
+Field-based constructor calls set supplied values in the allocated instance
+before running initializers. A later initializer assignment can overwrite a
+supplied value. An exception stops the remaining initialization. A constructor
+declared with an `error` result returns a GPP exception thrown by its own
+class's instance initializers as that error.
+
 ## Composite literals remain distinct
 
 Go-style composite literals remain valid GPP:

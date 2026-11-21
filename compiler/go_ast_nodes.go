@@ -1127,6 +1127,9 @@ func constructorExprNode(call *CallExpr, context constructorContext) (ExprNode, 
 			return nil, true, sourceLineError(call.Span(), initErr)
 		}
 		constructorInitializers = parentInitializers
+		if hasInstanceInitializers(class) {
+			constructorInitializers = append(constructorInitializers, constructorInitializer{Helper: instanceInitializerMethod})
+		}
 	}
 	if len(constructorInitializers) == 0 {
 		return instance, true, nil
@@ -1288,6 +1291,9 @@ func constructorParentInitializers(class *ClassDecl, classes map[string]*ClassDe
 				return nil, err
 			}
 			result = append(result, parentInitializers...)
+			if hasInstanceInitializers(parent) {
+				result = append(result, constructorInitializer{Path: parentPath, Helper: instanceInitializerMethod})
+			}
 			continue
 		}
 		var defaultInitializer *Method

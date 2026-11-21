@@ -863,6 +863,9 @@ func validateClass(pkg *PackageSymbols, class *ClassDecl) error {
 	}
 	fields := map[string]bool{}
 	for _, field := range class.Fields {
+		if field.Name == instanceInitializerMethod || field.Name == instanceInitializerBody || field.Name == instanceInitializerWithError {
+			return fieldDiagnosticf(class, &field, "class %s field %s is reserved for GPP initialization", class.Name, field.Name)
+		}
 		if field.Name == "GppDynamicClass" || field.Name == "GppDynamicObject" {
 			return fieldDiagnosticf(class, &field, "class %s field %s is reserved for GPP runtime metadata", class.Name, field.Name)
 		}
@@ -901,7 +904,7 @@ func validateClass(pkg *PackageSymbols, class *ClassDecl) error {
 		if method.IsStatic && tokensContainIdentifier(methodBodyTokens(method), "this") {
 			return methodDiagnosticf(class, &method, "static method %s has no this", method.Name)
 		}
-		if method.Name == "GppRuntimeClass" || method.Name == "GppRuntimeObject" || method.Name == bindClassObjectMethod || method.Name == ownsClassReceiverMethod ||
+		if method.Name == "GppRuntimeClass" || method.Name == "GppRuntimeObject" || method.Name == bindClassObjectMethod || method.Name == ownsClassReceiverMethod || method.Name == instanceInitializerBody ||
 			strings.HasPrefix(method.Name, "GppInitialize") || strings.HasPrefix(method.Name, "__gppInit") ||
 			strings.HasPrefix(method.Name, classDispatchPrefix) {
 			return methodDiagnosticf(class, &method, "class %s method %s is reserved for GPP generated methods", class.Name, method.Name)
@@ -962,6 +965,9 @@ func validateClass(pkg *PackageSymbols, class *ClassDecl) error {
 		}
 	}
 	if err := validateInitializerDelegation(class, pkg.Classes); err != nil {
+		return err
+	}
+	if err := validateInstanceInitializers(class); err != nil {
 		return err
 	}
 
@@ -1871,7 +1877,7 @@ func validateAmbiguousMemberAccess(model *SemanticModel, pkg *PackageSymbols, cl
 		return err
 	}
 
-	for _, method := range class.Methods {
+	for _, method := range classMethodsForMemberValidation(class) {
 		member := findAmbiguousThisMemberTokens(methodBodyTokens(method), ambiguous)
 		if member == "" {
 			continue
@@ -1954,7 +1960,7 @@ func validatePrivateInheritedMemberAccess(model *SemanticModel, pkg *PackageSymb
 		return nil
 	}
 	classTypes := semanticClassLineage(model, pkg, class, map[*ClassDecl]bool{})
-	for _, method := range class.Methods {
+	for _, method := range classMethodsForMemberValidation(class) {
 		typedReceivers := map[string]bool{"this": true}
 		for classType := range classTypes {
 			typedReceivers[classType] = true

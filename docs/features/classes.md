@@ -402,6 +402,27 @@ the caller should capture the constructor error or handle it with `??`. See the
 [constructor specification](/reference/specifications/constructors) for the
 complete rules.
 
+### Instance field initializers and blocks
+
+A field can have an initializer expression. A block directly inside the class
+body can also initialize the instance.
+
+```gpp
+class Account {
+    Balance int64 = 100
+    {
+        this.Balance += 25
+    }
+}
+
+account := Account()
+```
+
+The class runs these initializers in declaration order, after its parents
+finish and before the rest of its constructor runs. They run once per
+instance through a `this(...)` chain. A Go composite literal such as
+`Account{}` uses ordinary Go initialization.
+
 ## When a builder pattern helps
 
 An initializer fits work every instance should share. A builder solves a

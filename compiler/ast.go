@@ -231,6 +231,7 @@ type ClassDecl struct {
 	Annotations            []AnnotationUse
 	SerializationQualifier string
 	Fields                 []Field
+	InstanceInitializers   []*BlockStmt
 	Methods                []Method
 	SpanValue              Span
 }
@@ -298,13 +299,15 @@ func (declaration *ExtendDecl) Span() Span {
 }
 
 type Field struct {
-	Name        string
-	TypeAST     TypeNode
-	Owner       *File
-	TypeSpan    Span
-	SpanValue   Span
-	Doc         string
-	Annotations []AnnotationUse
+	Name            string
+	TypeAST         TypeNode
+	InitializerAST  ExprNode
+	InitializerSpan Span
+	Owner           *File
+	TypeSpan        Span
+	SpanValue       Span
+	Doc             string
+	Annotations     []AnnotationUse
 }
 
 func (*Field) node() {}

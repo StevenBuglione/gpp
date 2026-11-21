@@ -1199,6 +1199,10 @@ func readQualifiedIdent(src string) (string, int) {
 
 func parseClassBody(class *ClassDecl, body string, sourceBase int, fullSource string) error {
 	pos := 0
+	tokens, err := LexSource("class body", body)
+	if err != nil {
+		return err
+	}
 
 	for pos < len(body) {
 		pos = skipSpace(body, pos)
@@ -1210,6 +1214,32 @@ func parseClassBody(class *ClassDecl, body string, sourceBase int, fullSource st
 		if candidate, next := leadingDocComments(body, pos); candidate != "" {
 			doc = candidate
 			pos = next
+		}
+		if pos >= len(body) {
+			break
+		}
+		if body[pos] == ';' {
+			pos++
+			continue
+		}
+		if body[pos] == '{' {
+			close, err := findMatchingBrace(body, pos)
+			if err != nil {
+				return err
+			}
+			bodyStart := sourceBase + pos + 1
+			blockTokens, err := LexSource("instance initializer", body[pos+1:close])
+			if err != nil {
+				return err
+			}
+			block, err := ParseBodyAST(rebaseTokens(blockTokens, fullSource, bodyStart))
+			if err != nil {
+				return err
+			}
+			block.SpanValue = sourceSpan(fullSource, sourceBase+pos, sourceBase+close+1)
+			class.InstanceInitializers = append(class.InstanceInitializers, block)
+			pos = close + 1
+			continue
 		}
 
 		if keywordAt(body, pos, "static") {
@@ -1248,9 +1278,9 @@ func parseClassBody(class *ClassDecl, body string, sourceBase int, fullSource st
 			continue
 		}
 
-		end := lineEnd(body, pos)
+		end, next := classFieldEnd(tokens, pos, len(body))
 		line := strings.TrimSpace(body[pos:end])
-		field, err := parseFieldLine(line)
+		field, err := parseFieldLine(line, fullSource, sourceBase+pos)
 		if err != nil {
 			return err
 		}
@@ -1279,13 +1309,40 @@ func parseClassBody(class *ClassDecl, body string, sourceBase int, fullSource st
 			class.Fields = append(class.Fields, field)
 		}
 
-		pos = end
+		pos = next
 	}
 
 	return nil
 }
 
-func parseFieldLine(line string) (Field, error) {
+func classFieldEnd(tokens []Token, start, end int) (int, int) {
+	index := sort.Search(len(tokens), func(index int) bool { return tokens[index].Span.Start >= start })
+	depth := 0
+	var previous string
+	for _, token := range tokens[index:] {
+		if depth == 0 {
+			if token.Kind == TokenComment && strings.HasPrefix(token.Text, "//") && previous != "=" {
+				return token.Span.Start, token.Span.End
+			}
+			if token.Text == ";" || (token.Kind == TokenNewline && previous != "=") {
+				return token.Span.Start, token.Span.End
+			}
+		}
+		if token.Kind == TokenComment || token.Kind == TokenNewline {
+			continue
+		}
+		switch token.Text {
+		case "{", "(", "[":
+			depth++
+		case "}", ")", "]":
+			depth--
+		}
+		previous = token.Text
+	}
+	return end, end
+}
+
+func parseFieldLine(line, source string, offset int) (Field, error) {
 	line = strings.TrimSpace(line)
 	if line == "" {
 		return Field{}, nil
@@ -1303,15 +1360,39 @@ func parseFieldLine(line string) (Field, error) {
 		base = strings.TrimSpace(line[:at])
 		annotations = uses
 	}
+	tokens, err := LexSource("class field", base)
+	if err != nil {
+		return Field{}, err
+	}
+	var expr ExprNode
+	var initializerSpan Span
+	if equal := topLevelAssignment(tokens); equal >= 0 {
+		if tokens[equal].Text != "=" {
+			return Field{}, fmt.Errorf("field initializer requires =")
+		}
+		value := tokens[equal+1:]
+		expr, err = ParseExpressionTokens(rebaseTokens(value, source, offset))
+		if err != nil || expr == nil {
+			return Field{}, fmt.Errorf("invalid field initializer: %v", err)
+		}
+		start := tokens[equal].Span.End
+		for start < len(base) && unicode.IsSpace(rune(base[start])) {
+			start++
+		}
+		initializerSpan = sourceSpan(source, offset+start, offset+len(strings.TrimRightFunc(base, unicode.IsSpace)))
+		base = base[:tokens[equal].Span.Start]
+	}
 	parts := strings.Fields(base)
 	if len(parts) < 2 {
 		return Field{}, nil
 	}
 	typeText := strings.Join(parts[1:], " ")
 	return Field{
-		Name:        parts[0],
-		TypeAST:     parseTypeText(typeText),
-		Annotations: annotations,
+		Name:            parts[0],
+		TypeAST:         parseTypeText(typeText),
+		InitializerAST:  expr,
+		InitializerSpan: initializerSpan,
+		Annotations:     annotations,
 	}, nil
 }
 
