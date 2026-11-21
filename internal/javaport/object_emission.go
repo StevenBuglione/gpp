@@ -306,7 +306,7 @@ func (ctx javaObjectContext) emitMethod(out *strings.Builder, method *javaObject
 	if method.defaultMethod != nil {
 		fmt.Fprintf(out, "\t%s%s\n", returnKeyword(result), ctx.defaultCall(method.defaultMethod, "this", arguments))
 	} else if method.enumImplicit {
-		out.WriteString("\treturn this.Name()\n")
+		emitInheritedEnumMethod(out, method)
 	} else if declaration.Body == nil {
 		fmt.Fprintf(out, "\tpanic(%q)\n", "abstract Java method "+declaration.Symbol)
 	} else {

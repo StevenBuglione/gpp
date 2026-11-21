@@ -459,15 +459,8 @@ func (program *javaObjectProgram) layoutClass(class *javaObjectClass) error {
 	if declaration.Kind == "RECORD" && class.virtual["GppJavaRecord"] != nil {
 		return unsupportedSource(class.file, declaration, "Go record marker collides with method GppJavaRecord")
 	}
-	if class.hasEnumIdentity() {
-		for _, name := range []string{"Name", "Ordinal", "GppJavaEnum"} {
-			if class.virtual[name] != nil {
-				return unsupportedSource(class.file, declaration, "Go enum bridge collides with method "+name)
-			}
-		}
-		if method := class.virtual["ToString"]; method != nil && method.declaration.Name != "toString" {
-			return unsupportedSource(class.file, declaration, "Go enum bridge collides with method ToString")
-		}
+	if class.hasEnumIdentity() && class.virtual["GppJavaEnum"] != nil {
+		return unsupportedSource(class.file, declaration, "Go enum bridge collides with method GppJavaEnum")
 	}
 	for _, method := range []string{"GppJavaBindOwner", "GppJavaOwner", "GppJavaCanonicalObject", "GppJavaReferenceView",
 		"GppJavaClassName", "GppJavaIdentityHash", "GppJavaString", "GppJavaHashCode", javaImplementsBridge} {

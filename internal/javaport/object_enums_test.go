@@ -29,9 +29,16 @@ public class Events {
 }`},
 		{"Weighted.java", `package reference.enums;
 public interface Weighted { int score(); }`},
+		{"EnumInfo.java", `package reference.enums;
+public interface EnumInfo {
+    String name();
+    int ordinal();
+    int hashCode();
+    boolean equals(Object other);
+}`},
 		{"Priority.java", `package reference.enums;
 @Deprecated
-public enum Priority implements Weighted {
+public enum Priority implements Weighted, EnumInfo {
     LOW(Events.mark(1)), FAST(Events.mark(2)), CAFÉ;
 
     public static final int LITERAL = 900;
@@ -67,6 +74,10 @@ public enum Priority implements Weighted {
     }
     public boolean same(Object other) { return this == other && equals(other); }
     public boolean hashStable() { return hashCode() == hashCode(); }
+    public static boolean inherited(EnumInfo value) {
+        return value.name() == "FAST" && value.ordinal() == 1 &&
+            value.hashCode() == FAST.hashCode() && value.equals(FAST) && !value.equals(LOW);
+    }
     public int order(Priority other) { return compareTo(other); }
     public int lengthAfterObjectConversion() { return ("" + (Object) this).length(); }
     private static <T> T copy(T value) { return value; }
@@ -160,6 +171,8 @@ class Probe {
         System.out.println(low.same(Priority.valueOf("LOW")));
         System.out.println(low.same(fast));
         System.out.println(low.same(null));
+        System.out.println(Priority.inherited(fast));
+        System.out.println(Priority.inherited(low));
         System.out.println(fast.order(low));
         System.out.println(café.order(low));
         System.out.println(Priority.traditional(low));
@@ -247,6 +260,8 @@ func main() {
     fmt.Println(low.Same(enums.PriorityValueOf(java.StringFromGo("LOW"))))
     fmt.Println(low.Same(fast))
     fmt.Println(low.Same(nil))
+    fmt.Println(enums.PriorityInherited(fast))
+    fmt.Println(enums.PriorityInherited(low))
     fmt.Println(fast.Order(low))
     fmt.Println(cafe.Order(low))
     fmt.Println(enums.PriorityTraditional(low))

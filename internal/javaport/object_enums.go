@@ -65,23 +65,50 @@ func (program *javaObjectProgram) completeEnum(class *javaObjectClass) error {
 		}
 		program.methods[method.Symbol].enumImplicit = true
 	}
-	symbol := owner + "#toString()"
-	if program.methods[symbol] == nil {
-		method := Occurrence{Kind: "METHOD", Name: "toString", Owner: owner, Symbol: symbol, Result: javaStringType,
-			Modifiers: []string{"PUBLIC"}, Synthetic: true, Body: &MethodBody{}}
+	// Inherited Enum methods can fulfill a source interface without an
+	// explicit enum override. Register them before method layout.
+	for _, method := range []Occurrence{
+		{Name: "name", Symbol: owner + "#name()", Result: javaStringType},
+		{Name: "ordinal", Symbol: owner + "#ordinal()", Result: "int"},
+		{Name: "hashCode", Symbol: owner + "#hashCode()", Result: "int"},
+		{Name: "equals", Symbol: owner + "#equals(java.lang.Object)", Result: "boolean",
+			Parameters: []Parameter{{Name: "other", Type: javaObjectType}}},
+		{Name: "toString", Symbol: owner + "#toString()", Result: javaStringType},
+	} {
+		// Only toString is overridable. Javac rejects overrides of the
+		// other inherited Enum methods.
+		if method.Name == "toString" && program.methods[method.Symbol] != nil {
+			continue
+		}
+		method.Kind, method.Owner = "METHOD", owner
+		method.Modifiers = []string{"PUBLIC"}
+		if method.Name != "toString" {
+			method.Modifiers = append(method.Modifiers, "FINAL")
+		}
+		method.Synthetic, method.Body = true, &MethodBody{}
 		if err := program.addMethod(class, method); err != nil {
 			return err
 		}
-		program.methods[symbol].enumImplicit = true
+		program.methods[method.Symbol].enumImplicit = true
 	}
 	return nil
 }
 
 func (program *javaObjectProgram) emitEnumMembers(out *strings.Builder, class *javaObjectClass, name string) {
-	fmt.Fprintf(out, "\nfunc (this *%s) Name() *javart.String { return this.javaEnumName }\n", name)
-	fmt.Fprintf(out, "\nfunc (this *%s) Ordinal() int32 { return this.javaEnumOrdinal }\n", name)
 	fmt.Fprintf(out, "\nfunc (*%s) GppJavaEnum() string { return %q }\n", name, class.declaration.Symbol)
+}
 
+func emitInheritedEnumMethod(out *strings.Builder, method *javaObjectMethod) {
+	switch method.declaration.Name {
+	case "toString", "name":
+		out.WriteString("\treturn this.javaEnumName\n")
+	case "ordinal":
+		out.WriteString("\treturn this.javaEnumOrdinal\n")
+	case "hashCode":
+		out.WriteString("\treturn javart.ObjectIdentityHash(this)\n")
+	case "equals":
+		out.WriteString("\treturn javart.EnumEquals(this, parameter0)\n")
+	}
 }
 
 func enumNameArgument(name string) string {
