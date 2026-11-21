@@ -13,8 +13,9 @@ type tryBranchTransfers struct {
 }
 
 type tryBranchTarget struct {
-	label string
-	loop  bool
+	label     string
+	loop      bool
+	namedOnly bool
 }
 
 // The try body and each catch run in generated functions. A branch to a target
@@ -64,6 +65,9 @@ func (branches *tryBranchTransfers) rewriteList(statements []ast.Stmt, targets [
 func (branches *tryBranchTransfers) rewrite(statement ast.Stmt, targets []tryBranchTarget, label string) ast.Stmt {
 	switch node := statement.(type) {
 	case *ast.LabeledStmt:
+		if labeledGoBlock(node) != nil {
+			targets = append(targets, tryBranchTarget{label: node.Label.Name, namedOnly: true})
+		}
 		node.Stmt = branches.rewrite(node.Stmt, targets, node.Label.Name)
 	case *ast.BlockStmt:
 		branches.rewriteList(node.List, targets)
@@ -94,7 +98,7 @@ func (branches *tryBranchTransfers) rewrite(statement ast.Stmt, targets []tryBra
 				if node.Label.Name == target.label {
 					return node
 				}
-			} else if node.Tok == token.BREAK || target.loop {
+			} else if !target.namedOnly && (node.Tok == token.BREAK || target.loop) {
 				return node
 			}
 		}

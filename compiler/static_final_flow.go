@@ -83,8 +83,9 @@ func (flow finalFlow) allPaths(initial finalState) finalState {
 }
 
 type finalBranchTarget struct {
-	label string
-	loop  bool
+	label     string
+	loop      bool
+	namedOnly bool
 }
 
 type staticFinalAnalyzer struct {
@@ -167,19 +168,42 @@ func (analyzer *staticFinalAnalyzer) block(block *BlockStmt, parent *fieldLocalS
 		return flow
 	}
 	scope := newFieldLocalScope(parent)
-	label := ""
+	var labels []string
 	for _, statement := range block.Statements {
 		if declaration, ok := statement.(*LabelStmt); ok {
-			label = declaration.Name
+			labels = append(labels, declaration.Name)
 			continue
 		}
-		next := analyzer.statement(statement, scope, flow.normal, label)
-		label = ""
+		var next finalFlow
+		if labeled, ok := statement.(*BlockStmt); ok && len(labels) > 0 {
+			next = analyzer.labeledBlock(labeled, scope, flow.normal, labels)
+		} else {
+			label := ""
+			if len(labels) > 0 {
+				label = labels[len(labels)-1]
+			}
+			next = analyzer.statement(statement, scope, flow.normal, label)
+		}
+		labels = labels[:0]
 		flow.normal = nil
 		flow.join(next)
 		if flow.normal == nil || analyzer.err != nil {
 			break
 		}
+	}
+	return flow
+}
+
+func (analyzer *staticFinalAnalyzer) labeledBlock(block *BlockStmt, scope *fieldLocalScope, state finalState, labels []string) finalFlow {
+	size := len(analyzer.targets)
+	for _, label := range labels {
+		analyzer.targets = append(analyzer.targets, finalBranchTarget{label: label, namedOnly: true})
+	}
+	flow := analyzer.block(block, scope, state)
+	analyzer.targets = analyzer.targets[:size]
+	for _, label := range labels {
+		flow.normal = joinFinalStates(flow.normal, flow.breaks[label])
+		delete(flow.breaks, label)
 	}
 	return flow
 }
@@ -238,7 +262,7 @@ func (analyzer *staticFinalAnalyzer) branch(node *BranchStmt, state finalState) 
 	}
 	for index := len(analyzer.targets) - 1; index >= 0; index-- {
 		target := analyzer.targets[index]
-		if label != "" && target.label != label {
+		if label != "" && target.label != label || label == "" && target.namedOnly {
 			continue
 		}
 		if node.Keyword == "break" {

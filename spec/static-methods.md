@@ -658,7 +658,8 @@ final. Assign it by simple name in a static initializer of the declaring class.
 Every path that completes class initialization must assign each blank final
 exactly once. The compiler checks reads and assignments across branches,
 loops, switch cases, and exception handling. Labeled breaks can exit an
-enclosing loop or switch, and labeled continues resume an enclosing loop.
+enclosing loop, switch, or explicitly labeled block. Labeled continues
+resume an enclosing loop.
 
 ```go
 class Settings {

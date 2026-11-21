@@ -409,6 +409,9 @@ func ResolveProgramWithModulePath(program *Program, modulePath string) (*Semanti
 			if err := validateFileEnumSwitches(file, pkg, model, modulePath); err != nil {
 				diagnostics = append(diagnostics, DiagnosticsOf(err)...)
 			}
+			if err := validateFileLabeledBlocks(file); err != nil {
+				diagnostics = append(diagnostics, err)
+			}
 			if err := validateFileMemberVisibility(model, pkg, file, staticFields); err != nil {
 				diagnostics = append(diagnostics, err)
 			}

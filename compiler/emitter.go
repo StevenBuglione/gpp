@@ -339,6 +339,10 @@ func emitFile(file *File, context constructorContext) ([]byte, error) {
 	}
 	body = insertAfterImports(body, templateImports)
 	body = rewriteLogicalPackageImports(body, file.Imports, context.ModulePath)
+	body, err = lowerLabeledBlocks(body, file)
+	if err != nil {
+		return nil, err
+	}
 	body, err = rewriteStaticFields(body, context)
 	if err != nil {
 		return nil, err

@@ -33,7 +33,7 @@ type CompileOptions struct {
 
 const generatedFilesManifestName = ".gpp-generated-files.json"
 const generatedGoVersion = "1.27"
-const generatedCodeSchema = 21
+const generatedCodeSchema = 22
 
 type generatedFilesManifest struct {
 	Files    []string                          `json:"files"`

@@ -1132,10 +1132,14 @@ The compiler must preserve this behavior.
 # Branches Through Finally
 
 A `break` or `continue` inside `try` or `catch` can target an enclosing
-loop. A `break` can also exit an enclosing switch or select. The branch
-runs each crossed `finally` block from innermost to outermost before
-control reaches the target. An exception thrown during cleanup takes
-precedence over the pending branch.
+loop. A `break` can also exit an enclosing switch, select, or explicitly
+labeled block. The branch runs each crossed `finally` block from innermost
+to outermost before control reaches the target. An exception thrown during
+cleanup takes precedence over the pending branch.
+
+For example, `work: { ... break work ... }` exits the block after its
+cleanup. A block label can be reused in disjoint scopes. A Go `goto` still
+targets the original entry of an unambiguous label.
 
 ---
 
