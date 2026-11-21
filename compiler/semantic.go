@@ -1328,11 +1328,9 @@ func constructorContextForFile(file *File, model *SemanticModel, modulePath stri
 		if target.Class == nil || target.Qualifier == "" {
 			continue
 		}
-		context.ClassMethodSignatures[key] = methodSignaturesForClass(
-			target.Class,
-			classesForClass(context, target.Class),
-			map[*ClassDecl]bool{},
-		)
+		classes := classesForClass(context, target.Class)
+		context.ClassMethodSignatures[key] = methodSignaturesForClass(target.Class, classes, map[*ClassDecl]bool{})
+		context.StaticMethodSignatures[key] = staticMethodSignaturesForClass(target.Class, classes, map[*ClassDecl]bool{})
 	}
 
 	for name, class := range localClasses {

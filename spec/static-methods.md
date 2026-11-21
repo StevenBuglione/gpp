@@ -199,9 +199,9 @@ No vtable lookup is involved.
 
 # Static Method Shadowing
 
-A subclass may declare a static method with the same name as a parent.
-
-This hides/shadows the inherited static method for lookup through the subclass.
+A subclass may declare a static method with the same signature as a parent
+method. The subclass method hides that declaration. Inherited overloads with
+different signatures remain available through the subclass.
 
 Example:
 
@@ -258,6 +258,17 @@ B.Version()
 to resolve to the inherited `A.Version()` implementation.
 
 The implementation remains statically bound to `A`.
+
+Within a method, constructor, or initializer, an in-scope static method
+can also be called by name. Static calls in an inherited body resolve in the
+class that declared the body. Where instance and static overloads share a
+name, argument types determine the selected member. A static context rejects
+a selected instance method. Fixed-arity candidates take precedence over calls
+that pack a variadic tail.
+
+GPP retains lexical lookup for Go callables. A local function value or a
+package-level callable can use the same name as a static method. A class
+qualifier selects the static method explicitly.
 
 ---
 

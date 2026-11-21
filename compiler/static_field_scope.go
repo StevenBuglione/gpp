@@ -178,9 +178,15 @@ func (visit classFieldVisitor) expression(expr ExprNode, scope *fieldLocalScope,
 	case *ParenthesizedExpr:
 		visit.expression(node.Inner, scope, write)
 	case *CallExpr:
-		if name, bare := node.Callee.(*NameExpr); bare {
-			if !scope.contains(name.Name) {
-				visit(classFieldUse{name: name, callee: true})
+		if name := simpleCallName(node.Callee); name != nil && !scope.contains(name.Name) {
+			visit(classFieldUse{name: name, callee: true})
+			switch callee := node.Callee.(type) {
+			case *IndexExpr:
+				child(callee.Index)
+			case *IndexListExpr:
+				for _, index := range callee.Indices {
+					child(index)
+				}
 			}
 		} else {
 			child(node.Callee)
@@ -217,6 +223,17 @@ func (visit classFieldVisitor) expression(expr ExprNode, scope *fieldLocalScope,
 		}
 		visit.block(node.Body, nested)
 	}
+}
+
+func simpleCallName(callee ExprNode) *NameExpr {
+	switch indexed := callee.(type) {
+	case *IndexExpr:
+		callee = indexed.Receiver
+	case *IndexListExpr:
+		callee = indexed.Receiver
+	}
+	name, _ := callee.(*NameExpr)
+	return name
 }
 
 func bindFieldLocals(scope *fieldLocalScope, parameters []ParameterNode) {
@@ -265,12 +282,13 @@ func validateStaticFieldOrder(class *ClassDecl) error {
 // Bind source names before type-dependent lowering, including overloaded
 // calls. Both emission paths then use the existing qualified field lowering.
 // Keep the parsed method intact, since inherited bodies can be emitted again.
-func bindImplicitStaticFields(method Method, class *ClassDecl, context constructorContext) (Method, error) {
+func bindImplicitClassMembers(method Method, class *ClassDecl, context constructorContext) (Method, error) {
 	if method.Owner == nil || method.BodyAST == nil {
 		return method, nil
 	}
 	classes := classesForClass(context, class)
-	if !needsClassInitialization(class, classes, map[*ClassDecl]bool{}) {
+	staticMethods := context.StaticMethodSignatures[class.Name]
+	if len(staticMethods) == 0 && !needsClassInitialization(class, classes, map[*ClassDecl]bool{}) {
 		return method, nil
 	}
 	scope := newFieldLocalScope(nil)
@@ -285,12 +303,25 @@ func bindImplicitStaticFields(method Method, class *ClassDecl, context construct
 		}
 	}
 
-	receiver := staticFieldScopePrefix + class.Name + "."
+	fieldReceiver := staticFieldScopePrefix + class.Name + "."
+	callReceiver := classScopeCallPrefix + class.Name + "."
+	if method.IsStatic {
+		callReceiver = staticScopeCallPrefix + class.Name + "."
+	}
 	source := methodBodySource(method)
-	locations := map[int]bool{}
+	locations := map[int]string{}
 	fields := map[string]*Field{}
 	visit := classFieldVisitor(func(use classFieldUse) {
-		field, lookedUp := fields[use.name.Name]
+		name := use.name.Name
+		position := use.name.Span().Start - method.BodySpan.Start
+		if position < 0 || position+len(name) > len(source) || source[position:position+len(name)] != name {
+			return
+		}
+		if use.callee && len(staticMethods[name]) != 0 && !packageCallNamed(name, context) {
+			locations[position] = callReceiver
+			return
+		}
+		field, lookedUp := fields[name]
 		if !lookedUp {
 			ref, _ := findStaticField(class, use.name.Name, "", classes, map[*ClassDecl]bool{})
 			field = ref.field
@@ -299,11 +330,7 @@ func bindImplicitStaticFields(method Method, class *ClassDecl, context construct
 		if field == nil || (use.callee && !isFunctionType(field.TypeAST)) {
 			return
 		}
-		position := use.name.Span().Start - method.BodySpan.Start
-		if position >= 0 && position+len(use.name.Name) <= len(source) &&
-			source[position:position+len(use.name.Name)] == use.name.Name {
-			locations[position] = true
-		}
+		locations[position] = fieldReceiver
 	})
 	visit.block(method.BodyAST, scope)
 	if len(locations) == 0 {
@@ -318,7 +345,7 @@ func bindImplicitStaticFields(method Method, class *ClassDecl, context construct
 	previous := 0
 	for _, position := range positions {
 		body.WriteString(source[previous:position])
-		body.WriteString(receiver)
+		body.WriteString(locations[position])
 		previous = position
 	}
 	body.WriteString(source[previous:])
@@ -339,7 +366,7 @@ func bindImplicitStaticFields(method Method, class *ClassDecl, context construct
 
 // A same-package inherited body can be emitted on the derived Go receiver.
 // Its static names still bind in the original source class.
-func declaringClassForStaticFieldLookup(class *ClassDecl, method Method, classes map[string]*ClassDecl) *ClassDecl {
+func declaringClassForMemberLookup(class *ClassDecl, method Method, classes map[string]*ClassDecl) *ClassDecl {
 	if method.Owner == nil || classDeclaresMethod(class, method) || method.Name == instanceInitializerBody {
 		return class
 	}

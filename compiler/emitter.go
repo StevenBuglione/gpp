@@ -1986,7 +1986,7 @@ func emitClass(out *strings.Builder, file *File, class *ClassDecl, context const
 	boundInitializers := map[string]Method{}
 	for _, initializer := range classInitializers(class) {
 		name := methodOutputName(*initializer)
-		bound, err := bindImplicitStaticFields(*initializer, class, context)
+		bound, err := bindImplicitClassMembers(*initializer, class, context)
 		if err != nil {
 			return err
 		}
@@ -2033,9 +2033,9 @@ func emitClass(out *strings.Builder, file *File, class *ClassDecl, context const
 		if bound, exists := boundInitializers[methodName]; exists {
 			method = bound
 		} else {
-			declaringClass := declaringClassForStaticFieldLookup(class, method, classes)
+			declaringClass := declaringClassForMemberLookup(class, method, classes)
 			var err error
-			method, err = bindImplicitStaticFields(method, declaringClass, context)
+			method, err = bindImplicitClassMembers(method, declaringClass, context)
 			if err != nil {
 				return err
 			}
@@ -3044,7 +3044,7 @@ func methodSourceLine(method Method, class *ClassDecl) int {
 }
 
 func emitStaticMethod(out *strings.Builder, sourcePath string, class *ClassDecl, method Method, context constructorContext, interpolationName string) error {
-	method, err := bindImplicitStaticFields(method, class, context)
+	method, err := bindImplicitClassMembers(method, class, context)
 	if err != nil {
 		return err
 	}

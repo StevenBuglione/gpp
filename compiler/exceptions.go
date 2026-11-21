@@ -1171,24 +1171,23 @@ func lowerExceptionPromotionStatement(statement Stmt, context constructorContext
 			}
 		}
 	case *ReturnStmt:
-		if len(value.Values) == 1 {
-			if call, ok := value.Values[0].(*CallExpr); ok {
-				if result, found := promotedCallForExpr(call, context, context.CurrentParameterTypes); found && result.trailingError && functionResultCount != len(result.types) && len(value.Values) == len(result.types)-1 {
-					lowered, err := wrap(call, false)
-					if err != nil {
-						return err
-					}
-					value.Values[0] = lowered
+		for index, expression := range value.Values {
+			var lowered ExprNode
+			var err error
+			if call, ok := expression.(*CallExpr); ok && len(value.Values) == 1 {
+				result, found := promotedCallForExpr(call, context, context.CurrentParameterTypes)
+				if !found || !result.trailingError || functionResultCount == len(result.types) || len(value.Values) != len(result.types)-1 {
+					lowered, err = lowerExceptionPromotionCallChildren(call, context)
+				} else {
+					lowered, err = wrap(call, false)
 				}
+			} else {
+				lowered, err = lowerNestedExceptionPromotionExpr(expression, context)
 			}
-		} else {
-			for index := range value.Values {
-				lowered, err := lowerNestedExceptionPromotionExpr(value.Values[index], context)
-				if err != nil {
-					return err
-				}
-				value.Values[index] = lowered
+			if err != nil {
+				return err
 			}
+			value.Values[index] = lowered
 		}
 	case *IfStmt:
 		var err error
@@ -4264,7 +4263,11 @@ func promotedCallForExpr(call *CallExpr, context constructorContext, valueTypes 
 			candidates = append(candidates, promotedCandidatesForLoweredExpr(function.Receiver, context)...)
 		}
 	case *SelectorExpr:
-		candidates = append(candidates, promotedSelectorCandidates(function, call, context, valueTypes)...)
+		selectorCandidates := promotedSelectorCandidates(function, call, context, valueTypes)
+		if len(selectorCandidates) == 0 && strings.HasPrefix(function.Name, "GppStatic_") {
+			selectorCandidates = promotedCandidatesForLoweredExpr(function, context)
+		}
+		candidates = append(candidates, selectorCandidates...)
 		if native, ok := promotedNativePackageCall(function, call, context); ok {
 			return native, true
 		}
@@ -4288,6 +4291,12 @@ func promotedCallForExpr(call *CallExpr, context constructorContext, valueTypes 
 func promotedSelectorCandidates(function *SelectorExpr, call *CallExpr, context constructorContext, valueTypes map[string]string) []callableSignature {
 	if function == nil || call == nil {
 		return nil
+	}
+	resolution, handled, err := resolveClassScopeCall(call, context, valueTypes)
+	if handled && err == nil {
+		signature := resolution.signature
+		signature.ResultAST = parseTypeText(substituteLambdaType(signature.resultText(), resolution.typeBindings))
+		return []callableSignature{signature}
 	}
 	actualType := staticExpressionTypeNode(function.Receiver, context, valueTypes)
 	var candidates []callableSignature

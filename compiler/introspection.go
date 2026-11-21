@@ -732,17 +732,11 @@ func effectiveMethodDescriptors(class *ClassDecl, classes map[string]*ClassDecl,
 	defer delete(visiting, class)
 
 	var result []methodDescriptor
-	key := func(method Method) string {
-		if static {
-			return method.Name
-		}
-		return fmt.Sprintf("%s/%d", methodSignatureKey(method), len(method.TypeParamsAST))
-	}
 	seen := map[string]bool{}
 	for _, method := range class.Methods {
 		if method.IsStatic == static {
 			result = append(result, methodDescriptor{Method: method, Index: len(result)})
-			seen[key(method)] = true
+			seen[methodDeclarationKey(method)] = true
 		}
 	}
 	for _, parentName := range classParentNames(class) {
@@ -757,10 +751,10 @@ func effectiveMethodDescriptors(class *ClassDecl, classes map[string]*ClassDecl,
 		var accepted []string
 		for _, descriptor := range inherited {
 			method := descriptor.Method
-			if method.Name != "init" && memberVisibleToSubclass(method.Name) && !seen[key(method)] {
+			if method.Name != "init" && memberVisibleToSubclass(method.Name) && !seen[methodDeclarationKey(method)] {
 				descriptor.Path = append([]string{classParentFieldName(parentName)}, descriptor.Path...)
 				result = append(result, descriptor)
-				accepted = append(accepted, key(method))
+				accepted = append(accepted, methodDeclarationKey(method))
 			}
 		}
 		for _, name := range accepted {

@@ -40,16 +40,18 @@ func (parameter parameterInfo) defaultText() string {
 }
 
 type callableSignature struct {
-	Name       string
-	GoName     string
-	Qualifier  string
-	ImportPath string
-	Parameters []parameterInfo
-	ResultAST  TypeNode
-	StaticSelf bool
-	SourceFile string
-	SourceLine int
-	SourceSpan Span
+	DeclaringClass *ClassDecl
+	Name           string
+	GoName         string
+	Qualifier      string
+	ImportPath     string
+	Parameters     []parameterInfo
+	TypeParams     []TypeParameterNode
+	ResultAST      TypeNode
+	StaticSelf     bool
+	SourceFile     string
+	SourceLine     int
+	SourceSpan     Span
 }
 
 func (signature callableSignature) resultText() string {
@@ -307,10 +309,12 @@ func methodSignaturesForClass(class *ClassDecl, classes map[string]*ClassDecl, v
 			continue
 		}
 		result[method.Name] = append(result[method.Name], callableSignature{
-			Name:       method.Name,
-			GoName:     methodOutputName(method),
-			Parameters: parameters,
-			ResultAST:  methodResultTypeNode(method),
+			DeclaringClass: class,
+			Name:           method.Name,
+			GoName:         methodOutputName(method),
+			Parameters:     parameters,
+			TypeParams:     method.TypeParamsAST,
+			ResultAST:      methodResultTypeNode(method),
 		})
 	}
 	for _, parentName := range classParentNames(class) {
@@ -336,22 +340,24 @@ func staticMethodSignaturesForClass(class *ClassDecl, classes map[string]*ClassD
 	defer delete(visiting, class)
 
 	result := map[string][]callableSignature{}
-	localNames := map[string]bool{}
+	localSignatures := map[string]bool{}
 	for _, method := range class.Methods {
 		if !method.IsStatic {
 			continue
 		}
-		localNames[method.Name] = true
 		parameters, err := parameterInfosForMethod(method)
 		if err != nil {
 			continue
 		}
+		localSignatures[methodDeclarationKey(method)] = true
 		result[method.Name] = append(result[method.Name], callableSignature{
-			Name:       method.Name,
-			GoName:     staticMethodGoName(class, method),
-			Parameters: parameters,
-			ResultAST:  methodResultTypeNode(method),
-			StaticSelf: method.ContextualSelf,
+			DeclaringClass: class,
+			Name:           method.Name,
+			GoName:         staticMethodGoName(class, method),
+			TypeParams:     method.TypeParamsAST,
+			Parameters:     parameters,
+			ResultAST:      methodResultTypeNode(method),
+			StaticSelf:     method.ContextualSelf,
 		})
 	}
 	for _, parentName := range classParentNames(class) {
@@ -367,10 +373,10 @@ func staticMethodSignaturesForClass(class *ClassDecl, classes map[string]*ClassD
 			if !classMemberVisibleToSubclass(parent, name) {
 				continue
 			}
-			if localNames[name] {
-				continue
-			}
 			for _, signature := range signatures {
+				if localSignatures[callableDeclarationKey(signature)] {
+					continue
+				}
 				if signature.Qualifier == "" {
 					signature.Qualifier = qualifier
 					signature.ImportPath = importPathForAlias(class.Owner, qualifier)
@@ -1041,6 +1047,9 @@ func lowerCallableCallNode(call *CallExpr, context constructorContext) (ExprNode
 	if call == nil || call.Callee == nil {
 		return nil, false, nil
 	}
+	if lowered, handled, err := lowerClassScopeCall(call, context); handled {
+		return lowered, true, err
+	}
 	var signatures []callableSignature
 	staticCall := false
 	switch function := call.Callee.(type) {
@@ -1328,12 +1337,29 @@ func staticCallCalleeForSignature(original ExprNode, signature callableSignature
 func staticSignatureQualifier(signature callableSignature, context constructorContext) string {
 	qualifier := signature.Qualifier
 	if signature.ImportPath != "" && context.AvailableImports[qualifier] != signature.ImportPath {
-		qualifier = generatedStaticImportAlias(context.AvailableImports, "gpporm")
 		importPath := signature.ImportPath
-		if context.ModulePath != "" && strings.HasPrefix(importPath, "gpp/") {
-			importPath = context.ModulePath + "/" + importPath
+		if context.ModulePath != "" {
+			if strings.HasPrefix(importPath, "gpp/") {
+				importPath = context.ModulePath + "/" + importPath
+			} else if !strings.ContainsRune(importPath, '/') {
+				// An inherited method can carry a logical package path
+				// from another source file. Emit its physical module path.
+				importPath = context.ModulePath + "/" + strings.ReplaceAll(importPath, ".", "/")
+			}
 		}
-		context.AvailableImports[qualifier] = importPath
+		if context.AvailableImports[qualifier] != importPath {
+			var existing string
+			for alias, path := range context.AvailableImports {
+				if path == importPath && alias != "." && alias != "_" && (existing == "" || alias < existing) {
+					existing = alias
+				}
+			}
+			if existing != "" {
+				return existing
+			}
+			qualifier = generatedStaticImportAlias(context.AvailableImports, "gppStatic")
+			context.AvailableImports[qualifier] = importPath
+		}
 	}
 	return qualifier
 }
@@ -1786,6 +1812,14 @@ func expressionSourceForRewrite(expression ExprNode, src string) (string, error)
 func callableCallRewriteFor(call *CallExpr, src string, context constructorContext) (callableCallRewrite, bool, error) {
 	if call == nil {
 		return callableCallRewrite{}, false, nil
+	}
+	if lowered, handled, err := lowerClassScopeCall(call, context); handled {
+		if err != nil {
+			return callableCallRewrite{}, false, err
+		}
+		result, err := renderClassScopeCall(lowered, context)
+		span := call.Span()
+		return callableCallRewrite{call: call, start: span.Start, end: span.End, replacement: result}, err == nil, err
 	}
 	callee, err := expressionSourceForRewrite(call.Callee, src)
 	if err != nil {
@@ -2288,6 +2322,10 @@ func staticCallResultTypeNode(call *CallExpr, context constructorContext, valueT
 	}
 	if result, ok := generatedStaticSelfResultType(call.Callee, context); ok {
 		return result
+	}
+	resolution, handled, err := resolveClassScopeCall(call, context, valueTypes)
+	if handled && err == nil {
+		return substituteLambdaType(resolution.signature.resultText(), resolution.typeBindings)
 	}
 	if name, _, ok := constructorTargetForCallee(call.Callee, context); ok {
 		return "*" + name
