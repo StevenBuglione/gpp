@@ -35,6 +35,10 @@ func usesObjectEmitter(files []SourceFile) bool {
 			if declaration.Owner == "" && declaration.Kind == "INTERFACE" {
 				return true
 			}
+			if declaration.Kind == "BLOCK" && declaration.StaticInitializer ||
+				declaration.Kind == "VARIABLE" && slices.Contains(declaration.Modifiers, "STATIC") {
+				return true
+			}
 			if declaration.Kind == "METHOD" && declaration.Name == "<init>" &&
 				!slices.Contains(declaration.Modifiers, "PRIVATE") {
 				return true

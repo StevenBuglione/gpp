@@ -80,7 +80,7 @@ func main() {
 	}
 }
 
-func TestUtilityEmissionRejectsStaticInitializer(t *testing.T) {
+func TestUtilityEmissionRejectsUnmappedStaticInitializerCall(t *testing.T) {
 	java, release := referenceJDK(t)
 	path := filepath.Join(t.TempDir(), "Example.java")
 	writeTestFile(t, path, `package reference.primitive;
@@ -97,7 +97,7 @@ public final class Example {
 		t.Fatal(err)
 	}
 	if output, err := EmitGPP(report); output != "" || err == nil ||
-		!strings.Contains(err.Error(), "unsupported utility-class member") {
+		!strings.Contains(err.Error(), "unsupported Java method invocation java.lang.System#nanoTime()") {
 		t.Fatalf("initializer should block emission, got %q with %v", output, err)
 	}
 }

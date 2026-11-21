@@ -17,6 +17,9 @@ var javaCompoundOperators = map[string]string{
 }
 
 func (ctx javaObjectContext) assignment(expression *JavaExpression, asValue bool) (string, error) {
+	if target := staticMutationTarget(expression.Left); target != nil {
+		return ctx.assignStaticField(target, expression.Right)
+	}
 	if target := arrayMutationTarget(expression.Left); target != nil {
 		return ctx.arrayAssignment(target, expression.Right)
 	}
@@ -80,6 +83,14 @@ func (ctx javaObjectContext) updateVariable(target, operand *JavaExpression, ope
 		if err != nil {
 			return "", err
 		}
+	} else if field := staticMutationTarget(target); field != nil {
+		var setter string
+		var err error
+		setup, load, setter, err = ctx.staticFieldMutation(field)
+		if err != nil {
+			return "", err
+		}
+		store = setter + "(javaUpdateNew)"
 	} else {
 		addressable, err := ctx.mutationTarget(target)
 		if err != nil {

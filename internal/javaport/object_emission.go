@@ -73,6 +73,9 @@ func (program *javaObjectProgram) emitClass(out *strings.Builder, class *javaObj
 	if err := program.emitInstanceFieldBridges(out, class, name); err != nil {
 		return err
 	}
+	if err := program.emitStaticClass(out, class); err != nil {
+		return err
+	}
 
 	ctx := javaObjectContext{program: program, class: class, controlID: new(int)}
 	if len(class.initializers) > 0 {
@@ -125,6 +128,7 @@ type javaObjectContext struct {
 	program   *javaObjectProgram
 	class     *javaObjectClass
 	iface     *javaInterface
+	static    bool
 	arguments map[string]string
 	caught    map[string]string
 	locals    map[string]string
@@ -141,14 +145,11 @@ func (ctx javaObjectContext) emitConstructor(out *strings.Builder, method *javaO
 	parameters, arguments := ctx.program.objectParameterList(declaration.Parameters)
 	ctx.arguments = objectParameterNames(declaration.Parameters)
 	allocator := ctx.class.storageName(method.allocatorName())
-	fmt.Fprintf(out, "\nfunc %s(%s) *%s {\n\tthis := new(%s)\n", allocator, parameters, name, name)
-	for _, interfaceName := range slices.Sorted(maps.Keys(ctx.class.interfaces)) {
-		iface := ctx.class.interfaces[interfaceName]
-		if iface.hasAssertions {
-			ctx.program.runtime = true
-			fmt.Fprintf(out, "\t%s\n", iface.assertionStatus().enabled())
-		}
+	fmt.Fprintf(out, "\nfunc %s(%s) *%s {\n", allocator, parameters, name)
+	if guard := ctx.program.classInitialization(ctx.class); guard != "" {
+		fmt.Fprintf(out, "\t%s\n", guard)
 	}
+	fmt.Fprintf(out, "\tthis := new(%s)\n", name)
 	if ctx.class.parent != nil {
 		out.WriteString("\tthis.GppJavaBindOwner(this)\n")
 	}
@@ -184,7 +185,6 @@ func (ctx javaObjectContext) emitConstructor(out *strings.Builder, method *javaO
 		return fmt.Errorf("requires a resolved this(...) or super(...) invocation before the constructor body")
 	}
 	fmt.Fprintf(out, "\nfunc (this *%s) %s(%s) {\n", name, method.internal, parameters)
-	ctx.emitAssertionInitialization(out)
 	if declaration.Body.containsTry() {
 		ctx.emitJavaReturnBoundary(out, "void")
 	}
@@ -479,14 +479,8 @@ func (ctx javaObjectContext) expression(expression *JavaExpression) (string, err
 }
 
 func (ctx javaObjectContext) field(expression *JavaExpression) (string, error) {
-	if expression.Static && expression.UTF16LE != nil && expression.Receiver != "other" {
-		return ctx.program.stringLiteral(expression.UTF16LE)
-	}
-	if expression.Static && expression.Literal != "" && expression.Receiver != "other" {
-		return ctx.program.primitiveLowering.literal(expression.Type, expression.Literal)
-	}
-	if value := ctx.program.primitiveLowering.booleanConstant(expression); value != "" {
-		return value, nil
+	if expression.Static {
+		return ctx.readStaticField(expression)
 	}
 	field, err := ctx.instanceField(expression)
 	if err != nil {
@@ -496,6 +490,9 @@ func (ctx javaObjectContext) field(expression *JavaExpression) (string, error) {
 }
 
 func (ctx javaObjectContext) invoke(expression *JavaExpression) (string, error) {
+	if method := ctx.program.methods[expression.Symbol]; method != nil && method.static {
+		return ctx.callStatic(expression, method)
+	}
 	if method := ctx.program.interfaceMethods[expression.Symbol]; method != nil {
 		return ctx.invokeInterface(expression, method)
 	}
@@ -521,6 +518,11 @@ func (ctx javaObjectContext) invoke(expression *JavaExpression) (string, error) 
 				return "javart.ThrowableMessage(" + value + ")", err
 			}
 		case "java.lang.Throwable#getCause()":
+			if expression.Target.Type == javaExceptionInInitializerError {
+				value, err := ctx.expression(expression.Target)
+				ctx.program.runtime = true
+				return "javart.ClassInitializationCause(" + value + ")", err
+			}
 			if expression.Target.Type == javaAssertionError {
 				value, err := ctx.expression(expression.Target)
 				ctx.program.runtime = true

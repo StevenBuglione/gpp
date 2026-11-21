@@ -27,7 +27,10 @@ func (class *javaObjectClass) findAssertions() {
 	for _, declaration := range class.initializers {
 		class.hasAssertions = class.hasAssertions || declaration.Body.containsStatement(isJavaAssertion)
 	}
-	for _, methods := range [][]*javaObjectMethod{class.constructors, class.methods} {
+	for _, declaration := range class.staticInitializers {
+		class.hasAssertions = class.hasAssertions || declaration.Body.containsStatement(isJavaAssertion)
+	}
+	for _, methods := range [][]*javaObjectMethod{class.constructors, class.methods, class.staticMethods} {
 		for _, method := range methods {
 			class.hasAssertions = class.hasAssertions || method.declaration.Body.containsStatement(isJavaAssertion) ||
 				method.declaration.ConstructorCall.containsStatement(isJavaAssertion)

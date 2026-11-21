@@ -7,14 +7,16 @@ import (
 )
 
 const (
-	javaIOException              = "java.io.IOException"
-	javaIllegalArgumentException = "java.lang.IllegalArgumentException"
-	javaNullPointerException     = "java.lang.NullPointerException"
-	javaClassCastException       = "java.lang.ClassCastException"
-	javaArithmeticException      = "java.lang.ArithmeticException"
-	javaErrorType                = "java.lang.Error"
-	javaAssertionError           = "java.lang.AssertionError"
-	javaAutoCloseable            = "java.lang.AutoCloseable"
+	javaIOException                 = "java.io.IOException"
+	javaIllegalArgumentException    = "java.lang.IllegalArgumentException"
+	javaNullPointerException        = "java.lang.NullPointerException"
+	javaClassCastException          = "java.lang.ClassCastException"
+	javaArithmeticException         = "java.lang.ArithmeticException"
+	javaErrorType                   = "java.lang.Error"
+	javaExceptionInInitializerError = "java.lang.ExceptionInInitializerError"
+	javaNoClassDefFoundError        = "java.lang.NoClassDefFoundError"
+	javaAssertionError              = "java.lang.AssertionError"
+	javaAutoCloseable               = "java.lang.AutoCloseable"
 )
 
 var javaCatchTypes = map[string]string{
@@ -22,6 +24,9 @@ var javaCatchTypes = map[string]string{
 	"java.lang.Exception":                       "javart.Exception",
 	"java.lang.RuntimeException":                "javart.RuntimeException",
 	javaErrorType:                               "javart.Error",
+	"java.lang.LinkageError":                    "javart.LinkageError",
+	javaExceptionInInitializerError:             "*javart.ExceptionInInitializerError",
+	javaNoClassDefFoundError:                    "*javart.NoClassDefFoundError",
 	javaAssertionError:                          "*javart.AssertionError",
 	javaIllegalArgumentException:                "*javart.IllegalArgumentException",
 	javaNullPointerException:                    "*javart.NullPointerException",

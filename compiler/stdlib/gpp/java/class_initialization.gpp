@@ -1,0 +1,140 @@
+package gpp.java
+
+import (
+    "runtime"
+    "sync"
+    "sync/atomic"
+)
+
+type LinkageError interface {
+    Error
+    JavaLinkageError()
+}
+
+func ClassInitializationCause(failure interface{ Unwrap() error }) Throwable {
+    cause, _ := RequireNonNull(failure).Unwrap().(Throwable)
+    return cause
+}
+
+// The compiler reuses these declarations for native GPP class initialization.
+type ClassInitialization struct {
+    ready atomic.Bool
+    mutex sync.Mutex
+    pending chan struct{}
+    owner uint64
+    failure error
+    nativePanic any
+}
+
+type ExceptionInInitializerError struct {
+    Class string
+    Cause error
+}
+
+func (failure *ExceptionInInitializerError) Error() string {
+    return "exception initializing " + failure.Class + ": " + failure.Cause.Error()
+}
+func (failure *ExceptionInInitializerError) Unwrap() error { return failure.Cause }
+func (*ExceptionInInitializerError) JavaClassName() string { return "java.lang.ExceptionInInitializerError" }
+func (*ExceptionInInitializerError) JavaError() {}
+func (*ExceptionInInitializerError) JavaLinkageError() {}
+
+type NoClassDefFoundError struct {
+    Class string
+    Cause error
+}
+
+func (failure *NoClassDefFoundError) Error() string { return "could not initialize class " + failure.Class }
+func (failure *NoClassDefFoundError) Unwrap() error { return failure.Cause }
+func (*NoClassDefFoundError) JavaClassName() string { return "java.lang.NoClassDefFoundError" }
+func (*NoClassDefFoundError) JavaError() {}
+func (*NoClassDefFoundError) JavaLinkageError() {}
+
+func (state *ClassInitialization) Ensure(class string, initialize func(), unwrap func(any) (error, bool), raise func(error)) {
+    if state.ready.Load() { return }
+    for {
+        state.mutex.Lock()
+        if state.ready.Load() {
+            state.mutex.Unlock()
+            return
+        }
+        if state.failure != nil {
+            cause := state.failure
+            state.mutex.Unlock()
+            raise(&NoClassDefFoundError{Class: class, Cause: cause})
+            return
+        }
+        if state.nativePanic != nil {
+            recovered := state.nativePanic
+            state.mutex.Unlock()
+            panic(recovered)
+        }
+        // The supported Go runtime identifies the current goroutine in the
+        // header for Stack(..., false). Use it only on the initialization
+        // slow path, where recursion must be distinguished from a waiter.
+        owner := __gppClassInitGoroutine()
+        if owner == 0 {
+            state.mutex.Unlock()
+            panic("GPP class initialization could not identify the current goroutine")
+        }
+        if pending := state.pending; pending != nil {
+            recursive := state.owner == owner
+            state.mutex.Unlock()
+            if recursive { return }
+            <-pending
+            continue
+        }
+        state.pending = make(chan struct{})
+        state.owner = owner
+        state.mutex.Unlock()
+        break
+    }
+
+    complete := false
+    defer func() {
+        recovered := recover()
+        var failure error
+        if !complete {
+            if thrown, ok := unwrap(recovered); ok {
+                if _, isJavaError := thrown.(interface{ JavaError() }); isJavaError {
+                    failure = thrown
+                } else {
+                    failure = &ExceptionInInitializerError{Class: class, Cause: thrown}
+                }
+            }
+        }
+        state.mutex.Lock()
+        if complete {
+            state.ready.Store(true)
+        } else if failure != nil {
+            state.failure = failure
+        } else if recovered != nil {
+            state.nativePanic = recovered
+        } else {
+            // Goexit runs deferred functions without an active panic.
+            state.nativePanic = "goroutine exited during class initialization: " + class
+        }
+        close(state.pending)
+        state.pending = nil
+        state.owner = 0
+        state.mutex.Unlock()
+        if failure != nil { raise(failure) }
+        if recovered != nil { panic(recovered) }
+    }()
+    initialize()
+    complete = true
+}
+
+func __gppClassInitGoroutine() uint64 {
+    var header [64]byte
+    size := runtime.Stack(header[:], false)
+    const prefix = "goroutine "
+    if size <= len(prefix) || string(header[:len(prefix)]) != prefix { return 0 }
+    var id uint64
+    for _, digit := range header[len(prefix):size] {
+        if digit == ' ' { return id }
+        if digit < '0' || digit > '9' { return 0 }
+        id = id * 10 + uint64(digit - '0')
+    }
+    return 0
+}

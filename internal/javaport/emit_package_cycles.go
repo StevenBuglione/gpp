@@ -110,12 +110,29 @@ func (program javaObjectProgram) emitPackageFacade(name, storage string) (emitte
 					name, parameters, publicName, target, arguments)
 			}
 		}
+		if class.activeInitialization {
+			guard := class.staticGuardName()
+			fmt.Fprintf(&source, "\nfunc %s() { %s() }\n", guard,
+				program.qualify(storage, class.storageName(guard)))
+		}
+		for _, declaration := range class.fields {
+			if slices.Contains(declaration.Modifiers, "STATIC") && declaration.Constant == nil && javaStaticObservable(declaration) {
+				program.emitStaticField(&source, javaObjectField{declaration, class}, storage)
+			}
+		}
+		for _, method := range class.staticMethods {
+			if javaStaticObservable(method.declaration) {
+				if err := program.emitStaticMethod(&source, method, storage); err != nil {
+					return emittedObjectPackage{}, err
+				}
+			}
+		}
 	}
 	return program.finishPackage(&source)
 }
 
 func javaPublicConstant(field Occurrence) bool {
-	return slices.Contains(field.Modifiers, "STATIC") && slices.Contains(field.Modifiers, "PUBLIC")
+	return field.Constant != nil && slices.Contains(field.Modifiers, "STATIC") && slices.Contains(field.Modifiers, "PUBLIC")
 }
 
 func (class *javaObjectClass) constantStorageName(field Occurrence) string {

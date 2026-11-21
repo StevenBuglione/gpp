@@ -34,7 +34,7 @@ func EmitGPPPackages(report Report) ([]EmittedPackage, error) {
 	var objectFiles []SourceFile
 	objectPackages := map[string]bool{}
 	for _, name := range names {
-		if usesObjectEmitter(packages[name]) {
+		if packageHasJavaTypes(packages[name]) {
 			objectFiles = append(objectFiles, packages[name]...)
 			objectPackages[name] = true
 		}
@@ -73,6 +73,17 @@ func EmitGPPPackages(report Report) ([]EmittedPackage, error) {
 		result = append(result, units[name])
 	}
 	return result, nil
+}
+
+func packageHasJavaTypes(files []SourceFile) bool {
+	for _, file := range files {
+		for _, declaration := range file.Declarations {
+			if declaration.Owner == "" && (declaration.Kind == "CLASS" || declaration.Kind == "INTERFACE") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 type emittedObjectPackage struct {

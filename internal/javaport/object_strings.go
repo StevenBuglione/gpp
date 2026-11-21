@@ -113,11 +113,17 @@ func (ctx javaObjectContext) invokeString(expression *JavaExpression) (string, e
 }
 
 func (ctx javaObjectContext) checkedRuntimeCall(call, resultType string) string {
+	helper := ""
 	if ctx.iface != nil {
 		ctx.iface.checksErrors = true
-		return fmt.Sprintf("func() %s {\n\tjavaValue, javaFailure := %s\n\treturn %s(javaValue, javaFailure)\n}()",
-			ctx.program.objectGoType(resultType), call, ctx.iface.checkedResultName())
+		helper = ctx.iface.checkedResultName()
+	} else {
+		ctx.class.checksErrors = true
+		helper = ctx.class.checkedResultName()
 	}
-	ctx.class.checksErrors = true
-	return ctx.class.checkedResultName() + "(" + call + ")"
+	if ctx.iface != nil || ctx.static {
+		return fmt.Sprintf("func() %s {\n\tjavaValue, javaFailure := %s\n\treturn %s(javaValue, javaFailure)\n}()",
+			ctx.program.objectGoType(resultType), call, helper)
+	}
+	return helper + "(" + call + ")"
 }

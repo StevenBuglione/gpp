@@ -16,14 +16,17 @@ type javaObjectClass struct {
 	parent                 *javaObjectClass
 	fields                 []Occurrence
 	initializers           []Occurrence
+	staticInitializers     []Occurrence
 	constructors           []*javaObjectMethod
 	methods                []*javaObjectMethod
+	staticMethods          []*javaObjectMethod
 	virtual                map[string]*javaObjectMethod
 	interfaces             map[string]*javaInterface
 	embed                  bool
 	checksErrors           bool
 	closeable              bool
 	hasAssertions          bool
+	activeInitialization   bool
 	crossPackageDescendant bool
 }
 
@@ -33,6 +36,7 @@ type javaObjectMethod struct {
 	goName           string
 	internal         string
 	public           bool
+	static           bool
 	slot             *javaObjectMethod
 	overridden       bool
 	crossPackageInit bool
@@ -192,25 +196,21 @@ func prepareJavaObjects(files []SourceFile) (*javaObjectProgram, error) {
 func (program *javaObjectProgram) addMember(class *javaObjectClass, declaration Occurrence) error {
 	switch declaration.Kind {
 	case "BLOCK":
-		if declaration.StaticInitializer || declaration.Body == nil {
-			return fmt.Errorf("static or unsupported initializer block")
+		if declaration.Body == nil {
+			return fmt.Errorf("unsupported initializer block")
 		}
-		class.initializers = append(class.initializers, declaration)
+		if declaration.StaticInitializer {
+			class.staticInitializers = append(class.staticInitializers, declaration)
+		} else {
+			class.initializers = append(class.initializers, declaration)
+		}
 	case "VARIABLE":
 		if program.mappedObjectType(declaration.Type) == "" || !token.IsIdentifier(declaration.Name) {
 			return fmt.Errorf("unsupported field name or type %s", declaration.Type)
 		}
 		if slices.Contains(declaration.Modifiers, "STATIC") {
-			if declaration.Constant == nil || !hasOnlyModifiers(declaration, "STATIC", "FINAL", "PUBLIC", "PROTECTED", "PRIVATE") {
-				return fmt.Errorf("requires a compile-time primitive or String constant for static fields")
-			}
-			if slices.Contains(declaration.Modifiers, "PUBLIC") {
-				name := class.declaration.Name + declaration.Name
-				exports := program.exports[class.file.Package]
-				if exports[name] {
-					return fmt.Errorf("duplicate exported Go constant %s", name)
-				}
-				exports[name] = true
+			if err := program.addStaticField(class, declaration); err != nil {
+				return err
 			}
 		} else {
 			if !hasOnlyModifiers(declaration, "PUBLIC", "PRIVATE", "PROTECTED", "FINAL") {
@@ -223,6 +223,9 @@ func (program *javaObjectProgram) addMember(class *javaObjectClass, declaration 
 		class.fields = append(class.fields, declaration)
 		program.fields[declaration.Symbol] = javaObjectField{declaration, class}
 	case "METHOD":
+		if slices.Contains(declaration.Modifiers, "STATIC") {
+			return program.addStaticMethod(class, declaration)
+		}
 		return program.addMethod(class, declaration)
 	default:
 		return fmt.Errorf("unsupported class member %s", declaration.Kind)
@@ -325,6 +328,9 @@ func (program *javaObjectProgram) layoutClass(class *javaObjectClass) error {
 		}
 		class.closeable = class.closeable || class.parent.closeable
 		maps.Copy(class.interfaces, class.parent.interfaces)
+	}
+	if err := program.layoutStaticInitialization(class); err != nil {
+		return unsupportedSource(class.file, declaration, err.Error())
 	}
 	class.virtual = map[string]*javaObjectMethod{}
 	if class.parent != nil {
