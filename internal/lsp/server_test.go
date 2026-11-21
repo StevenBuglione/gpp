@@ -591,8 +591,9 @@ func TestWorkDoneProgressCancelCancelsItsRequest(t *testing.T) {
 	write(map[string]any{"jsonrpc": "2.0", "id": 21, "method": "workspace/symbol", "params": map[string]any{"workDoneToken": "progress-21"}})
 	<-started
 	write(map[string]any{"jsonrpc": "2.0", "method": "window/workDoneProgress/cancel", "params": map[string]any{"token": "progress-21"}})
-	close(release)
+	// Reading shutdown confirms the server has dispatched the cancellation.
 	write(map[string]any{"jsonrpc": "2.0", "id": 22, "method": "shutdown"})
+	close(release)
 	write(map[string]any{"jsonrpc": "2.0", "method": "exit"})
 	if err := <-done; err != nil {
 		t.Fatalf("server returned an error: %v", err)
