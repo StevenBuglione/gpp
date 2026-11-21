@@ -18,6 +18,7 @@ type javaObjectClass struct {
 	virtual      map[string]*javaObjectMethod
 	embed        bool
 	checksErrors bool
+	closeable    bool
 }
 
 type javaObjectMethod struct {
@@ -65,7 +66,7 @@ func emitJavaObjects(report Report) (string, error) {
 			}
 			if !token.IsExported(declaration.Name) || !token.IsIdentifier(declaration.Name) ||
 				!hasOnlyModifiers(declaration, "PUBLIC", "FINAL") || !slices.Contains(declaration.Modifiers, "PUBLIC") ||
-				!onlySourceAnnotations(declaration) || declaration.HasTypeParams || len(declaration.Supertypes) > 1 {
+				!onlySourceAnnotations(declaration) || declaration.HasTypeParams {
 				return "", unsupportedSource(file, declaration, "expected a public non-generic class with at most one superclass")
 			}
 			if program.exports[declaration.Name] {
@@ -124,7 +125,7 @@ func (program *javaObjectProgram) addMember(class *javaObjectClass, declaration 
 		}
 		class.initializers = append(class.initializers, declaration)
 	case "VARIABLE":
-		if objectGoType(declaration.Type) == "" || !token.IsIdentifier(declaration.Name) {
+		if program.objectGoType(declaration.Type) == "" || !token.IsIdentifier(declaration.Name) {
 			return fmt.Errorf("unsupported field name or type %s", declaration.Type)
 		}
 		if slices.Contains(declaration.Modifiers, "STATIC") {
@@ -145,7 +146,7 @@ func (program *javaObjectProgram) addMember(class *javaObjectClass, declaration 
 			if declaration.Initializer != nil {
 				class.initializers = append(class.initializers, declaration)
 			}
-			program.runtime = program.runtime || declaration.Type == javaStringType
+			program.useRuntimeType(declaration.Type)
 		}
 		class.fields = append(class.fields, declaration)
 		program.fields[declaration.Symbol] = javaObjectField{declaration, class}
@@ -163,16 +164,21 @@ func (program *javaObjectProgram) addMethod(class *javaObjectClass, declaration 
 		return fmt.Errorf("unsupported constructor or method modifiers, body, or type parameters")
 	}
 	for _, parameter := range declaration.Parameters {
-		if objectGoType(parameter.Type) == "" {
+		if program.objectGoType(parameter.Type) == "" {
 			return fmt.Errorf("unsupported parameter type %s", parameter.Type)
 		}
-		program.runtime = program.runtime || parameter.Type == javaStringType
+		program.useRuntimeType(parameter.Type)
 	}
 	method := &javaObjectMethod{declaration: declaration, class: class, public: slices.Contains(declaration.Modifiers, "PUBLIC")}
 	if declaration.Name == "<init>" {
 		suffix := constructorSuffix(declaration.Parameters)
 		method.goName = "New" + class.declaration.Name + suffix
 		method.internal = "javaInit" + suffix
+		for _, previous := range class.constructors {
+			if method.internal == previous.internal {
+				return fmt.Errorf("colliding Go constructor suffix %q", suffix)
+			}
+		}
 		if method.public {
 			if program.exports[method.goName] {
 				return fmt.Errorf("duplicate exported Go constructor %s", method.goName)
@@ -191,10 +197,10 @@ func (program *javaObjectProgram) addMethod(class *javaObjectClass, declaration 
 		if !method.public && !slices.Contains(declaration.Modifiers, "PRIVATE") {
 			return fmt.Errorf("package-private or protected methods require additional dispatch support")
 		}
-		if declaration.Result != "void" && objectGoType(declaration.Result) == "" {
+		if declaration.Result != "void" && program.objectGoType(declaration.Result) == "" {
 			return fmt.Errorf("unsupported method result type %s", declaration.Result)
 		}
-		program.runtime = program.runtime || declaration.Result == javaStringType
+		program.useRuntimeType(declaration.Result)
 		method.goName = exportMethodName(declaration.Name)
 		method.internal = "javaBody" + declaration.Name
 		if !token.IsIdentifier(method.goName) || !token.IsExported(method.goName) {
@@ -223,15 +229,22 @@ func (program *javaObjectProgram) layoutClass(class *javaObjectClass) error {
 	if len(class.constructors) == 0 {
 		return unsupportedSource(class.file, declaration, "missing attributed Java constructor")
 	}
-	if len(declaration.Supertypes) == 1 {
-		class.parent = program.classes[declaration.Supertypes[0]]
-		if class.parent == nil {
-			return unsupportedSource(class.file, declaration, "superclass must be included in the same emission")
+	for _, supertype := range declaration.Supertypes {
+		if supertype == javaAutoCloseable {
+			class.closeable = true
+			continue
 		}
+		if class.parent != nil || program.classes[supertype] == nil {
+			return unsupportedSource(class.file, declaration, "unsupported Java supertype "+supertype)
+		}
+		class.parent = program.classes[supertype]
+	}
+	if class.parent != nil {
 		if err := program.layoutClass(class.parent); err != nil {
 			return err
 		}
 		class.parent.embed = true
+		class.closeable = class.closeable || class.parent.closeable
 	}
 	class.virtual = map[string]*javaObjectMethod{}
 	if class.parent != nil {
@@ -252,6 +265,9 @@ func (program *javaObjectProgram) layoutClass(class *javaObjectClass) error {
 			method.slot.overridden = true
 		}
 		class.virtual[method.goName] = method
+	}
+	if class.closeable && class.virtual["GppAutoCloseable"] != nil {
+		return unsupportedSource(class.file, declaration, "Go AutoCloseable marker collides with method GppAutoCloseable")
 	}
 	for ancestor := class.parent; ancestor != nil; ancestor = ancestor.parent {
 		if method := class.virtual[objectViewName(ancestor)]; method != nil {
@@ -292,9 +308,8 @@ func constructorSuffix(parameters []Parameter) string {
 	var types []string
 	for _, parameter := range parameters {
 		name := parameter.Type
-		if name == javaStringType {
-			name = "String"
-		}
+		name = name[strings.LastIndex(name, ".")+1:]
+		name = strings.ReplaceAll(name, "[]", "Array")
 		types = append(types, exportMethodName(name))
 	}
 	if len(types) == 0 {
@@ -304,7 +319,18 @@ func constructorSuffix(parameters []Parameter) string {
 }
 
 func methodSignatureKey(declaration Occurrence) string {
-	return declaration.Name + "#" + constructorSuffix(declaration.Parameters)
+	var types []string
+	for _, parameter := range declaration.Parameters {
+		types = append(types, parameter.Type)
+	}
+	return declaration.Name + "(" + strings.Join(types, ",") + ")"
+}
+
+func (method *javaObjectMethod) allocatorName() string {
+	if method.public {
+		return method.goName
+	}
+	return "java" + method.goName
 }
 
 func objectViewName(class *javaObjectClass) string {

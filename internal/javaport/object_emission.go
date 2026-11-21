@@ -38,16 +38,19 @@ func (program *javaObjectProgram) emitClass(out *strings.Builder, class *javaObj
 	}
 	for _, field := range class.fields {
 		if !slices.Contains(field.Modifiers, "STATIC") {
-			fmt.Fprintf(out, "\tjavaField%s %s\n", field.Name, objectGoType(field.Type))
+			fmt.Fprintf(out, "\tjavaField%s %s\n", field.Name, program.objectGoType(field.Type))
 		}
 	}
 	for _, method := range class.methods {
 		if method.overridden {
-			parameters, _ := objectParameterList(method.declaration.Parameters)
-			fmt.Fprintf(out, "\tjavaDispatch%s func(%s)%s\n", method.goName, parameters, objectResultType(method))
+			parameters, _ := program.objectParameterList(method.declaration.Parameters)
+			fmt.Fprintf(out, "\tjavaDispatch%s func(%s)%s\n", method.goName, parameters, program.objectResultType(method))
 		}
 	}
 	out.WriteString("}\n")
+	if class.closeable && (class.parent == nil || !class.parent.closeable) {
+		fmt.Fprintf(out, "\nfunc (*%s) GppAutoCloseable() {}\n", name)
+	}
 	if class.embed {
 		fmt.Fprintf(out, "\ntype javaBase%s = %s\n", name, name)
 	}
@@ -100,31 +103,30 @@ type javaObjectContext struct {
 	class     *javaObjectClass
 	arguments map[string]string
 	caught    map[string]string
+	locals    map[string]string
 	inTry     bool
 }
 
 func (ctx javaObjectContext) emitConstructor(out *strings.Builder, method *javaObjectMethod) error {
 	name := ctx.class.declaration.Name
 	declaration := method.declaration
-	parameters, arguments := objectParameterList(declaration.Parameters)
+	parameters, arguments := ctx.program.objectParameterList(declaration.Parameters)
 	ctx.arguments = objectParameterNames(declaration.Parameters)
-	if method.public {
-		fmt.Fprintf(out, "\nfunc %s(%s) *%s {\n\tthis := new(%s)\n", method.goName, parameters, name, name)
-		// Attach the most-derived implementations before entering any Java constructor.
-		for _, methodName := range slices.Sorted(maps.Keys(ctx.class.virtual)) {
-			implementation := ctx.class.virtual[methodName]
-			slot := implementation.slot
-			if implementation == slot {
-				continue
-			}
-			receiver, _ := ctx.class.memberReceiver(slot.class)
-			owner, _ := ctx.class.memberReceiver(implementation.class)
-			fmt.Fprintf(out, "\t%s.javaDispatch%s = %s.%s\n", receiver, slot.goName, owner, implementation.internal)
+	fmt.Fprintf(out, "\nfunc %s(%s) *%s {\n\tthis := new(%s)\n", method.allocatorName(), parameters, name, name)
+	// Attach the most-derived implementations before entering any Java constructor.
+	for _, methodName := range slices.Sorted(maps.Keys(ctx.class.virtual)) {
+		implementation := ctx.class.virtual[methodName]
+		slot := implementation.slot
+		if implementation == slot {
+			continue
 		}
-		fmt.Fprintf(out, "\tthis.%s(%s)\n\treturn this\n}\n", method.internal, arguments)
-		if method.hasErrorAdapter() {
-			ctx.emitErrorAdapter(out, "", method.errorAdapterName(), parameters, "*"+name, method.goName+"("+arguments+")")
-		}
+		receiver, _ := ctx.class.memberReceiver(slot.class)
+		owner, _ := ctx.class.memberReceiver(implementation.class)
+		fmt.Fprintf(out, "\t%s.javaDispatch%s = %s.%s\n", receiver, slot.goName, owner, implementation.internal)
+	}
+	fmt.Fprintf(out, "\tthis.%s(%s)\n\treturn this\n}\n", method.internal, arguments)
+	if method.hasErrorAdapter() {
+		ctx.emitErrorAdapter(out, "", method.errorAdapterName(), parameters, "*"+name, method.goName+"("+arguments+")")
 	}
 	call := declaration.ConstructorCall
 	if call == nil || (call.Receiver != "this" && call.Receiver != "super") {
@@ -163,8 +165,8 @@ func (ctx javaObjectContext) emitConstructor(out *strings.Builder, method *javaO
 func (ctx javaObjectContext) emitMethod(out *strings.Builder, method *javaObjectMethod) error {
 	name := ctx.class.declaration.Name
 	declaration := method.declaration
-	parameters, arguments := objectParameterList(declaration.Parameters)
-	result := objectResultType(method)
+	parameters, arguments := ctx.program.objectParameterList(declaration.Parameters)
+	result := ctx.program.objectResultType(method)
 	ctx.arguments = objectParameterNames(declaration.Parameters)
 	bodyName := method.internal
 	if method.public && method.slot == method && !method.overridden {
@@ -173,7 +175,7 @@ func (ctx javaObjectContext) emitMethod(out *strings.Builder, method *javaObject
 	bodyResult := result
 	hasTry := declaration.Body.containsTry()
 	if hasTry && declaration.Result != "void" {
-		bodyResult = " (javaResult " + objectGoType(declaration.Result) + ")"
+		bodyResult = " (javaResult " + ctx.program.objectGoType(declaration.Result) + ")"
 	}
 	fmt.Fprintf(out, "\nfunc (this *%s) %s(%s)%s {\n", name, bodyName, parameters, bodyResult)
 	if hasTry {
@@ -217,7 +219,15 @@ func (ctx javaObjectContext) emitStatements(out *strings.Builder, body *MethodBo
 	if body == nil {
 		return fmt.Errorf("missing attributed statement sequence")
 	}
-	for _, statement := range body.Code {
+	ctx = ctx.localScope()
+	for index, statement := range body.Code {
+		if statement.Kind == "VARIABLE" && statement.Variable != nil {
+			name := fmt.Sprintf("javaLocal%d_%d", len(ctx.locals), index)
+			if err := ctx.emitVariable(out, *statement.Variable, name); err != nil {
+				return fmt.Errorf("%d:%d: %w", statement.Line, statement.Column, err)
+			}
+			continue
+		}
 		code, err := ctx.statement(statement, result)
 		if err != nil {
 			return fmt.Errorf("%d:%d: %w", statement.Line, statement.Column, err)
@@ -240,7 +250,7 @@ func (ctx javaObjectContext) statement(statement JavaStatement, result string) (
 		if expression != nil {
 			value, err := ctx.converted(expression, result)
 			if ctx.inTry && err == nil {
-				return "javart.Return[" + objectGoType(result) + "](" + value + ")", nil
+				return "javart.Return[" + ctx.program.objectGoType(result) + "](" + value + ")", nil
 			}
 			return "return " + value, err
 		}
@@ -263,14 +273,14 @@ func (ctx javaObjectContext) statement(statement JavaStatement, result string) (
 		if expression.Kind == "METHOD_INVOCATION" {
 			return ctx.invoke(expression)
 		}
-		if expression.Kind == "ASSIGNMENT" && expression.Left != nil && expression.Left.Kind == "FIELD" &&
-			!expression.Left.Static && expression.Right != nil {
-			field, err := ctx.field(expression.Left)
+		if expression.Kind == "ASSIGNMENT" && expression.Left != nil && !expression.Left.Static && expression.Right != nil &&
+			(expression.Left.Kind == "FIELD" || expression.Left.Kind == "LOCAL_VARIABLE") {
+			target, err := ctx.expression(expression.Left)
 			if err != nil {
 				return "", err
 			}
 			value, err := ctx.converted(expression.Right, expression.Left.Type)
-			return field + " = " + value, err
+			return target + " = " + value, err
 		}
 	}
 	return "", fmt.Errorf("unsupported statement %s", statement.Kind)
@@ -281,14 +291,8 @@ func (ctx javaObjectContext) converted(expression *JavaExpression, target string
 	if err != nil {
 		return "", err
 	}
-	if target == javaStringType {
-		switch expression.Type {
-		case javaStringType:
-			return value, nil
-		case "null":
-			ctx.program.runtime = true
-			return "(*javart.String)(" + value + ")", nil
-		}
+	if _, primitive := primitiveTypes[target]; !primitive {
+		return ctx.convertReference(value, expression.Type, target)
 	}
 	converted, usesRuntime, err := convertPrimitive(value, expression.Type, target)
 	ctx.program.runtime = ctx.program.runtime || usesRuntime
@@ -297,6 +301,11 @@ func (ctx javaObjectContext) converted(expression *JavaExpression, target string
 
 func (ctx javaObjectContext) expression(expression *JavaExpression) (string, error) {
 	switch expression.Kind {
+	case "LOCAL_VARIABLE":
+		if name, found := ctx.locals[expression.Name]; found {
+			return name, nil
+		}
+		return "", fmt.Errorf("cannot use Java local %s", expression.Name)
 	case "CATCH_PARAMETER":
 		if name, found := ctx.caught[expression.Name]; found {
 			return name, nil
@@ -307,6 +316,9 @@ func (ctx javaObjectContext) expression(expression *JavaExpression) (string, err
 	case "METHOD_INVOCATION":
 		return ctx.invoke(expression)
 	case "NEW_CLASS":
+		if ctx.program.classes[expression.Type] != nil {
+			return ctx.allocateObject(expression)
+		}
 		if _, throwable := javaCatchTypes[expression.Type]; throwable {
 			return ctx.newThrowable(expression)
 		}
@@ -316,12 +328,21 @@ func (ctx javaObjectContext) expression(expression *JavaExpression) (string, err
 	case "NULL_LITERAL":
 		return "nil", nil
 	case "EQUAL_TO", "NOT_EQUAL_TO":
-		return ctx.stringReferenceComparison(expression)
+		return ctx.referenceComparison(expression)
+	case "PLUS", "MULTIPLY":
+		return ctx.integerArithmetic(expression)
+	case "ARRAY_LENGTH":
+		if expression.Target == nil || expression.Target.Type != javaThrowableArray {
+			return "", fmt.Errorf("unsupported Java array length expression")
+		}
+		array, err := ctx.expression(expression.Target)
+		ctx.program.runtime = true
+		return "int32(len(javart.RequireNonNull(" + array + ")))", err
 	case "PARENTHESIZED":
 		value, err := ctx.expression(expression.Operand)
 		return "(" + value + ")", err
 	case "TYPE_CAST":
-		if expression.Type == javaStringType {
+		if primitiveTypes[expression.Type] == "" {
 			return ctx.converted(expression.Operand, expression.Type)
 		}
 		value, err := ctx.expression(expression.Operand)
@@ -370,9 +391,18 @@ func (ctx javaObjectContext) invoke(expression *JavaExpression) (string, error) 
 	}
 	if expression.Symbol == "java.lang.Throwable#getMessage()" && expression.Target != nil && expression.Target.Type == javaIOException {
 		value, err := ctx.expression(expression.Target)
-		return "(" + value + ").GetMessage()", err
+		ctx.program.runtime = true
+		return "javart.RequireNonNull(" + value + ").GetMessage()", err
+	}
+	if expression.Symbol == "java.lang.Throwable#getSuppressed()" && expression.Target != nil {
+		value, err := ctx.expression(expression.Target)
+		ctx.program.runtime = true
+		return "javart.Suppressed(" + value + ")", err
 	}
 	callee := ctx.program.methods[expression.Symbol]
+	if callee != nil && expression.Target != nil && ctx.program.classes[expression.Target.Type] != nil && callee.public {
+		return ctx.invokeReference(expression, callee)
+	}
 	if callee == nil || callee.declaration.Name == "<init>" ||
 		(expression.Receiver != "this" && expression.Receiver != "super") {
 		return "", fmt.Errorf("unsupported Java method invocation %s", expression.Symbol)
@@ -420,22 +450,22 @@ func objectParameterNames(parameters []Parameter) map[string]string {
 	return names
 }
 
-func objectParameterList(parameters []Parameter) (string, string) {
+func (program *javaObjectProgram) objectParameterList(parameters []Parameter) (string, string) {
 	declarations := make([]string, 0, len(parameters))
 	arguments := make([]string, 0, len(parameters))
 	for index, parameter := range parameters {
 		name := "parameter" + strconv.Itoa(index)
-		declarations = append(declarations, name+" "+objectGoType(parameter.Type))
+		declarations = append(declarations, name+" "+program.objectGoType(parameter.Type))
 		arguments = append(arguments, name)
 	}
 	return strings.Join(declarations, ", "), strings.Join(arguments, ", ")
 }
 
-func objectResultType(method *javaObjectMethod) string {
+func (program *javaObjectProgram) objectResultType(method *javaObjectMethod) string {
 	if method.declaration.Result == "void" {
 		return ""
 	}
-	return " " + objectGoType(method.declaration.Result)
+	return " " + program.objectGoType(method.declaration.Result)
 }
 
 func objectPrimitiveLiteral(javaType, value string) (string, error) {

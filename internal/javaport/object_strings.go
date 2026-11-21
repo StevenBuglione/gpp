@@ -9,11 +9,27 @@ import (
 
 const javaStringType = "java.lang.String"
 
-func objectGoType(javaType string) string {
+func (program *javaObjectProgram) objectGoType(javaType string) string {
 	if javaType == javaStringType {
 		return "*javart.String"
 	}
+	if class := program.classes[javaType]; class != nil {
+		return "*" + class.declaration.Name
+	}
+	if javaType == javaAutoCloseable {
+		return "javart.AutoCloseable"
+	}
+	if javaType == javaThrowableArray {
+		return "[]javart.Throwable"
+	}
+	if goType := javaCatchTypes[javaType]; goType != "" {
+		return goType
+	}
 	return primitiveTypes[javaType]
+}
+
+func (program *javaObjectProgram) useRuntimeType(javaType string) {
+	program.runtime = program.runtime || strings.Contains(program.objectGoType(javaType), "javart.")
 }
 
 func (program *javaObjectProgram) stringLiteral(encoded *string) (string, error) {
@@ -26,27 +42,6 @@ func (program *javaObjectProgram) stringLiteral(encoded *string) (string, error)
 	}
 	program.runtime = true
 	return "javart.InternStringLiteral(" + strconv.Quote(string(data)) + ")", nil
-}
-
-func (ctx javaObjectContext) stringReferenceComparison(expression *JavaExpression) (string, error) {
-	leftType, rightType := expression.Left.Type, expression.Right.Type
-	equal := expression.Kind == "EQUAL_TO"
-	if leftType == "null" && rightType == "null" {
-		return strconv.FormatBool(equal), nil
-	}
-	left, err := ctx.converted(expression.Left, javaStringType)
-	if err != nil {
-		return "", err
-	}
-	right, err := ctx.converted(expression.Right, javaStringType)
-	if err != nil {
-		return "", err
-	}
-	operator := " == "
-	if !equal {
-		operator = " != "
-	}
-	return "(" + left + operator + right + ")", nil
 }
 
 func (ctx javaObjectContext) newString(expression *JavaExpression) (string, error) {

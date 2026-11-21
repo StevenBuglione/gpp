@@ -51,7 +51,7 @@ type IllegalArgumentException struct {
 // to the existing Go error representation.
 func NewIllegalArgumentException(message *String) *IllegalArgumentException {
     text, _ := message.ToGo()
-    return &IllegalArgumentException{Message: text}
+    return allocateException(IllegalArgumentException{Message: text})
 }
 
 func (exception *IllegalArgumentException) Error() string {
@@ -67,7 +67,7 @@ func (exception *IllegalArgumentException) JavaRuntimeException() {}
 func (*IllegalArgumentException) JavaException() {}
 
 type NullPointerException struct {
-    _ byte
+    suppressed suppressedErrors
 }
 
 func (*NullPointerException) Error() string { return "java.lang.NullPointerException" }
@@ -96,6 +96,7 @@ func (*StringIndexOutOfBoundsException) JavaException() {}
 // IOException models the checked java.io.IOException class.
 type IOException struct {
     message *String
+    suppressed suppressedErrors
 }
 
 func NewIOException(message *String) *IOException {

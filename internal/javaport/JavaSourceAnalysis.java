@@ -279,13 +279,17 @@ class JavaSourceAnalysis {
             } else if (statement instanceof TryTree attempted) {
                 var block = attempted.getBlock();
                 record += ",\"body\":" + bodyRecord(new TreePath(path, block), block.getStatements()) +
-                    ",\"resources\":" + attempted.getResources().size() + ",\"catches\":[" +
+                    ",\"resources\":[" + attempted.getResources().stream()
+                    .map(resource -> variableRecord(new TreePath(path, resource)))
+                    .collect(Collectors.joining(",")) + "],\"catches\":[" +
                     attempted.getCatches().stream().map(handler -> catchRecord(new TreePath(path, handler), handler))
                     .collect(Collectors.joining(",")) + "]";
                 var cleanup = attempted.getFinallyBlock();
                 if (cleanup != null) {
                     record += ",\"finally\":" + bodyRecord(new TreePath(path, cleanup), cleanup.getStatements());
                 }
+            } else if (statement instanceof VariableTree) {
+                record += ",\"variable\":" + variableRecord(path);
             } else if (statement instanceof BlockTree block) {
                 record += ",\"body\":" + bodyRecord(path, block.getStatements());
             } else if (statement instanceof IfTree conditional) {
@@ -299,6 +303,19 @@ class JavaSourceAnalysis {
                 record += ",\"expression\":" + executableExpression(new TreePath(path, expression));
             }
             return record + "}";
+        }
+
+        private String variableRecord(TreePath path) {
+            var tree = path.getLeaf();
+            if (tree instanceof VariableTree declaration) {
+                var element = trees.getElement(path);
+                var initializer = declaration.getInitializer();
+                return "{\"name\":" + quote(declaration.getName().toString()) +
+                    ",\"type\":" + quote(expressionType(element == null ? null : element.asType())) +
+                    (initializer == null ? "" : ",\"initializer\":" + executableExpression(new TreePath(path, initializer))) + "}";
+            }
+            return "{\"type\":" + quote(expressionType(trees.getTypeMirror(path))) +
+                ",\"initializer\":" + executableExpression(path) + "}";
         }
 
         private String catchRecord(TreePath path, CatchTree handler) {
@@ -337,6 +354,10 @@ class JavaSourceAnalysis {
                 } else if (element != null && element.getKind() == ElementKind.EXCEPTION_PARAMETER) {
                     kind = "CATCH_PARAMETER";
                     attributes += ",\"name\":" + quote(identifier.getName().toString());
+                } else if (element != null && (element.getKind() == ElementKind.LOCAL_VARIABLE ||
+                        element.getKind() == ElementKind.RESOURCE_VARIABLE)) {
+                    kind = "LOCAL_VARIABLE";
+                    attributes += ",\"name\":" + quote(identifier.getName().toString());
                 } else if (element instanceof VariableElement field && element.getKind().isField()) {
                     kind = "FIELD";
                     attributes += fieldExpression(field, "this");
@@ -345,8 +366,15 @@ class JavaSourceAnalysis {
                 }
             } else if (tree instanceof MemberSelectTree selector && trees.getElement(path) instanceof VariableElement field &&
                     field.getKind().isField()) {
-                kind = "FIELD";
-                attributes += fieldExpression(field, receiver(path, selector.getExpression()));
+                var target = new TreePath(path, selector.getExpression());
+                if (selector.getIdentifier().contentEquals("length") &&
+                        trees.getTypeMirror(target) instanceof ArrayType) {
+                    kind = "ARRAY_LENGTH";
+                    attributes += ",\"target\":" + executableExpression(target);
+                } else {
+                    kind = "FIELD";
+                    attributes += fieldExpression(field, receiver(path, selector.getExpression()));
+                }
             } else if (tree instanceof MethodInvocationTree call) {
                 var callee = call.getMethodSelect();
                 String receiver = callee instanceof MemberSelectTree selector ? receiver(path, selector.getExpression()) : "this";
@@ -356,10 +384,8 @@ class JavaSourceAnalysis {
                 String symbol = symbol(trees.getElement(path));
                 attributes += ",\"symbol\":" + quote(symbol) + ",\"receiver\":" + quote(receiver) +
                     callArguments(path, call.getArguments());
-                if ((symbol.startsWith("java.lang.String#") || symbol.equals("java.lang.Throwable#getMessage()")) &&
-                        callee instanceof MemberSelectTree selector &&
-                        receiver.equals("other")) {
-                    var target = TreePath.getPath(path, selector.getExpression());
+                if (callee instanceof MemberSelectTree selector && receiver.equals("other")) {
+                    var target = new TreePath(new TreePath(path, callee), selector.getExpression());
                     attributes += ",\"target\":" + executableExpression(target);
                 }
             } else if (tree instanceof NewClassTree call) {
@@ -401,6 +427,9 @@ class JavaSourceAnalysis {
             }
             if (type instanceof DeclaredType declared && declared.asElement() instanceof TypeElement element) {
                 return elements.getBinaryName(element).toString();
+            }
+            if (type instanceof ArrayType array) {
+                return expressionType(array.getComponentType()) + "[]";
             }
             return type.getKind().name().toLowerCase(Locale.ROOT);
         }

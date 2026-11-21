@@ -1,0 +1,148 @@
+package gpp.java
+
+import (
+    "runtime"
+    "sync"
+    "weak"
+)
+
+// AutoCloseable is the native contract for a Java resource. A Go implementation
+// can use Raise in Close to report a Java exception.
+type AutoCloseable interface {
+    Close()
+    GppAutoCloseable()
+}
+
+// AsAutoCloseable converts a Go typed nil to a Java null resource.
+func AsAutoCloseable(resource AutoCloseable) AutoCloseable {
+    if isNullReference(resource) {
+        return nil
+    }
+    return resource
+}
+
+// CloseResource is deferred immediately after each resource initializer. Go's
+// defer order closes the last successfully initialized resource first.
+func CloseResource(resource AutoCloseable) {
+    pending := recover()
+    if resource = AsAutoCloseable(resource); resource == nil {
+        if pending != nil {
+            panic(pending)
+        }
+        return
+    }
+    primary, raised := UnwrapRaised(pending)
+    if !raised {
+        finishCleanup(pending, resource.Close)
+        return
+    }
+    defer func() {
+        if next := recover(); next != nil {
+            secondary, raised := UnwrapRaised(next)
+            if !raised {
+                panic(next)
+            }
+            first, firstJava := primary.(Throwable)
+            second, secondJava := secondary.(Throwable)
+            if firstJava && secondJava {
+                AddSuppressed(first, second)
+            }
+        }
+        panic(pending)
+    }()
+    resource.Close()
+}
+
+type suppressedErrors struct {
+    mutex sync.Mutex
+    values []Throwable
+}
+
+// AddSuppressed stores the secondary exception on the original Java object.
+func AddSuppressed(primary, secondary Throwable) {
+    if isNullReference(primary) || isNullReference(secondary) {
+        Throw(nil)
+    }
+    state := throwableSuppression(primary, true)
+    if state == nil {
+        return
+    }
+    if primary == secondary {
+        Throw(allocateException(IllegalArgumentException{Message: "Self-suppression not permitted"}))
+    }
+    state.mutex.Lock()
+    defer state.mutex.Unlock()
+    state.values = append(state.values, secondary)
+}
+
+// Suppressed snapshots the ordered suppressed exceptions, retaining their
+// original object identities.
+func Suppressed(primary Throwable) []Throwable {
+    if isNullReference(primary) {
+        Throw(nil)
+    }
+    state := throwableSuppression(primary, false)
+    if state == nil {
+        return []Throwable{}
+    }
+    state.mutex.Lock()
+    defer state.mutex.Unlock()
+    return append([]Throwable{}, state.values...)
+}
+
+func throwableSuppression(value Throwable, create bool) *suppressedErrors {
+    switch failure := value.(type) {
+    case *IOException:
+        return &failure.suppressed
+    case *NullPointerException:
+        return &failure.suppressed
+    case *IllegalArgumentException:
+        return suppressionsFor(failure, create)
+    case *StringIndexOutOfBoundsException:
+        return suppressionsFor(failure, create)
+    default:
+        return nil
+    }
+}
+
+// Native Go code already constructs some errors with struct literals. Keep
+// their public layouts and associate suppression by Go pointer identity.
+var suppressionRegistry sync.Map
+
+type exceptionAllocation[T any] struct {
+    value T
+    suppressed suppressedErrors
+}
+
+func allocateException[T any](value T) *T {
+    allocation := &exceptionAllocation[T]{value: value}
+    key := weak.Make(&allocation.value)
+    suppressionRegistry.Store(key, weak.Make(&allocation.suppressed))
+    runtime.AddCleanup(allocation, func(key weak.Pointer[T]) { suppressionRegistry.Delete(key) }, key)
+    return &allocation.value
+}
+
+func suppressionsFor[T any](failure *T, create bool) *suppressedErrors {
+    key := weak.Make(failure)
+    entry, found := suppressionRegistry.Load(key)
+    if !found {
+        if !create {
+            return nil
+        }
+        var loaded bool
+        entry, loaded = suppressionRegistry.LoadOrStore(key, &suppressedErrors{})
+        if !loaded {
+            runtime.AddCleanup(failure, func(key weak.Pointer[T]) { suppressionRegistry.Delete(key) }, key)
+        }
+    }
+    switch state := entry.(type) {
+    case weak.Pointer[suppressedErrors]:
+        result := state.Value()
+        runtime.KeepAlive(failure)
+        return result
+    case *suppressedErrors:
+        return state
+    default:
+        panic("invalid Java exception suppression state")
+    }
+}

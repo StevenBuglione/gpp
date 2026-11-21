@@ -137,7 +137,8 @@ and return a parameter, cast, or shift expression. Generated function names comb
 the Java class and method names. Floating-point narrowing follows Java's
 saturation and NaN rules through the bundled `gpp/java` package.
 
-For public classes with primitive or Java `String` fields and method signatures, the emitter
+For public classes with primitive, Java `String`, or supported class reference
+types in fields and method signatures, the emitter
 also supports same-package single inheritance, constructor chains, instance
 initialization and virtual calls during construction. It emits Go constructors
 such as `NewChild()` and `NewChildWithInt(int32)`. Go callers can use exported
@@ -149,6 +150,14 @@ The importer uses javac to check declared exceptions. For a public Java
 `read(...) throws IOException` method, the generated `GppCallRead(...)`
 adapter exposes the result and original exception as a Go `error`. A public
 constructor with `throws` has a corresponding `GppNew…` adapter.
+
+The emitter translates try-with-resources for same-package translated classes
+that implement Java `AutoCloseable`. Resources can be declared in the try header
+or supplied as existing variables. Successfully initialized resources close in
+reverse order. A failure from `close()` is suppressed when a Java exception is
+already pending. Go callers can inspect suppressed exceptions on supported
+runtime exception types with `java.Suppressed` and pass their own resources
+through the `java.AutoCloseable` interface.
 
 Java `String` becomes a `*java.String` from the generated module's `gpp/java`
 package. A nil pointer represents Java null. Use `StringFromGo` to decode Go

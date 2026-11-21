@@ -167,7 +167,7 @@ func main() {
 	}
 }
 
-func TestJavaEmissionRejectsUntranslatedTryWithResources(t *testing.T) {
+func TestJavaEmissionRejectsUnmappedJavaResourceType(t *testing.T) {
 	java, release := referenceJDK(t)
 	file := filepath.Join(t.TempDir(), "Resources.java")
 	writeTestFile(t, file, `package reference.protection;
@@ -181,7 +181,7 @@ public class Resources {
 	if err != nil || len(report.Diagnostics) != 0 {
 		t.Fatalf("expected successful javac attribution: %v %+v", err, report.Diagnostics)
 	}
-	if text, err := EmitGPP(report); text != "" || err == nil || !strings.Contains(err.Error(), "try-with-resources requires resource close and suppression support") {
+	if text, err := EmitGPP(report); text != "" || err == nil || !strings.Contains(err.Error(), "unsupported Java resource type java.io.Reader") {
 		t.Fatalf("expected a diagnostic before emission, got %q with %v", text, err)
 	}
 }

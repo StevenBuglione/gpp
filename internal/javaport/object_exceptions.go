@@ -10,6 +10,8 @@ const (
 	javaIOException              = "java.io.IOException"
 	javaIllegalArgumentException = "java.lang.IllegalArgumentException"
 	javaNullPointerException     = "java.lang.NullPointerException"
+	javaAutoCloseable            = "java.lang.AutoCloseable"
+	javaThrowableArray           = "java.lang.Throwable[]"
 )
 
 var javaCatchTypes = map[string]string{
@@ -71,14 +73,26 @@ func (ctx javaObjectContext) ifStatement(statement JavaStatement, result string)
 }
 
 func (ctx javaObjectContext) tryStatement(statement JavaStatement, result string) (string, error) {
-	if statement.Resources > 0 {
-		return "", fmt.Errorf("try-with-resources requires resource close and suppression support")
-	}
 	ctx.program.runtime = true
 	ctx.inTry = true
 	var code strings.Builder
 	code.WriteString("javart.Try(func() {\n")
-	if err := ctx.emitStatements(&code, statement.Body, result); err != nil {
+	resourceContext := ctx.localScope()
+	for index, resource := range statement.Resources {
+		class := ctx.program.classes[resource.Type]
+		if resource.Type != javaAutoCloseable && (class == nil || !class.closeable) {
+			return "", fmt.Errorf("unsupported Java resource type %s", resource.Type)
+		}
+		if resource.Initializer == nil {
+			return "", fmt.Errorf("missing attributed Java resource initializer")
+		}
+		name := fmt.Sprintf("javaResource%d_%d", len(ctx.locals), index)
+		if err := resourceContext.emitVariable(&code, resource, name); err != nil {
+			return "", err
+		}
+		fmt.Fprintf(&code, "\tdefer javart.CloseResource(%s)\n", name)
+	}
+	if err := resourceContext.emitStatements(&code, statement.Body, result); err != nil {
 		return "", err
 	}
 	code.WriteString("}, ")

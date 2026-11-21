@@ -150,11 +150,18 @@ type JavaStatement struct {
 	Body       *MethodBody     `json:"body,omitempty"`
 	Catches    []JavaCatch     `json:"catches,omitempty"`
 	Finally    *MethodBody     `json:"finally,omitempty"`
-	Resources  int             `json:"resources,omitempty"`
+	Resources  []JavaVariable  `json:"resources,omitempty"`
+	Variable   *JavaVariable   `json:"variable,omitempty"`
 	Then       *JavaStatement  `json:"then,omitempty"`
 	Else       *JavaStatement  `json:"else,omitempty"`
 	Line       int64           `json:"line"`
 	Column     int64           `json:"column"`
+}
+
+type JavaVariable struct {
+	Name        string          `json:"name,omitempty"`
+	Type        string          `json:"type"`
+	Initializer *JavaExpression `json:"initializer,omitempty"`
 }
 
 type JavaCatch struct {

@@ -79,7 +79,7 @@ func StringCharAt(value *String, index int32) (uint16, error) {
     }
     length := len(value.encoded)/2
     if index < 0 || int(index) >= length {
-        return 0, &StringIndexOutOfBoundsException{Index: index, Length: length}
+        return 0, allocateException(StringIndexOutOfBoundsException{Index: index, Length: length})
     }
     return stringCodeUnit(value.encoded, int(index)), nil
 }

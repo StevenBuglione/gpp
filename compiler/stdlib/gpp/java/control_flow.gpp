@@ -4,14 +4,31 @@ import "reflect"
 
 // Throw implements Java's throw statement, including throw null.
 func Throw(failure Throwable) {
-    if failure == nil {
-        Raise(&NullPointerException{})
-    }
-    pointer := reflect.ValueOf(failure)
-    if pointer.Kind() == reflect.Pointer && pointer.IsNil() {
+    if isNullReference(failure) {
         Raise(&NullPointerException{})
     }
     Raise(failure)
+}
+
+func isNullReference(value any) bool {
+    if value == nil {
+        return true
+    }
+    reference := reflect.ValueOf(value)
+    switch reference.Kind() {
+    case reflect.Pointer, reflect.Interface, reflect.Slice, reflect.Map, reflect.Func, reflect.Chan:
+        return reference.IsNil()
+    default:
+        return false
+    }
+}
+
+// RequireNonNull checks a translated Java receiver or array reference.
+func RequireNonNull[T any](value T) T {
+    if isNullReference(value) {
+        Throw(nil)
+    }
+    return value
 }
 
 // Try runs a translated Java try statement. A handler returns true after it
@@ -34,7 +51,10 @@ func Try(body func(), handle func(error) bool, cleanup func()) {
 }
 
 func runFinally(cleanup func()) {
-    pending := recover()
+    finishCleanup(recover(), cleanup)
+}
+
+func finishCleanup(pending any, cleanup func()) {
     if pending != nil && !isJavaCompletion(pending) {
         // Java return and throw signals must never hide a native Go panic.
         defer func() {
