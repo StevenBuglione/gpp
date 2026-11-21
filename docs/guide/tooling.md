@@ -147,7 +147,16 @@ Java `String` becomes a `*java.String` from the generated module's `gpp/java`
 package. A nil pointer represents Java null. Use `StringFromGo` to decode Go
 UTF-8 and `ToGo` to decode a Java name and check for null. Use `StringFromUTF16`
 and `UTF16` when every code unit must survive, including unpaired surrogates.
-Literals and explicit interning share references within the generated module.
+Literals and explicit interning share references in the selected Java runtime.
+When multiple Go modules need to exchange these values, compile the provider
+module with its bundled `gpp/java` and point each consumer at that Go package.
+Use the same GPP version for the provider and consumers, then resolve the
+provider through ordinary Go module requirements or a local Go workspace.
+Use one runtime binding throughout each generated module.
+
+```bash
+gpp compile -java-runtime-import example.com/provider/gpp/java ./consumer
+```
 
 ## Developing this documentation site
 

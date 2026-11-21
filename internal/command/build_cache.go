@@ -61,6 +61,7 @@ func buildInputKey(sources []string, projectRoot string, options compileFlags, s
 	writeHashPart(h, fmt.Sprintf("schema=%d", buildCacheSchema))
 	writeHashPart(h, "compiler="+gppVersion())
 	writeHashPart(h, "module="+options.module)
+	writeHashPart(h, "java-runtime-import="+options.javaRuntimeImport)
 	writeHashPart(h, "project-root="+projectRoot)
 	writeHashPart(h, fmt.Sprintf("no-prelude=%t", options.noPrelude))
 	writeHashPart(h, fmt.Sprintf("no-stdlib=%t", options.noStdlib))

@@ -1,0 +1,33 @@
+/*
+ * Copyright 2012-present the original author or authors.
+ */
+
+// Ported from FailureAnalysis in Spring Boot 4.2.0.
+package org.springframework.boot.diagnostics
+
+import "gpp/java"
+
+type FailureAnalysis struct {
+    description *java.String
+    action *java.String
+    cause java.Throwable
+}
+
+func NewFailureAnalysis(description, action *java.String, cause java.Throwable) *FailureAnalysis {
+    if description == nil {
+        description = java.InternStringLiteral("")
+    }
+    return &FailureAnalysis{description: description, action: action, cause: cause}
+}
+
+func (analysis *FailureAnalysis) GetDescription() *java.String {
+    return analysis.description
+}
+
+func (analysis *FailureAnalysis) GetAction() *java.String {
+    return analysis.action
+}
+
+func (analysis *FailureAnalysis) GetCause() java.Throwable {
+    return analysis.cause
+}

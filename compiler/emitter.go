@@ -20,6 +20,9 @@ func Emit(file *File) ([]byte, error) {
 }
 
 func EmitWithOptions(file *File, options CompileOptions) ([]byte, error) {
+	if err := validateJavaRuntimeImport(options); err != nil {
+		return nil, err
+	}
 	atExit, err := validateAtExit(&Program{Files: []*File{file}})
 	if err != nil {
 		return nil, err
@@ -46,6 +49,7 @@ func EmitWithOptions(file *File, options CompileOptions) ([]byte, error) {
 	context.Enums = model.Packages[file.Package].Enums
 	context.Annotations = model.Packages[file.Package].Annotations
 	context.Package = file.Package
+	context.JavaRuntimeImport = options.JavaRuntimeImport
 	context.AtExit = atExit
 	context.Development = options.Development
 	context.Templates = model.Packages[file.Package].Templates
@@ -144,6 +148,7 @@ type constructorContext struct {
 	Package                    string
 	AtExit                     bool
 	ModulePath                 string
+	JavaRuntimeImport          string
 	Development                bool
 	AvailableImports           map[string]string
 	GlobalValueTypes           map[string]string
@@ -338,7 +343,7 @@ func emitFile(file *File, context constructorContext) ([]byte, error) {
 		}
 	}
 	body = ensureGeneratedImports(body, context)
-	body = rewriteOfficialImports(body, context.ModulePath)
+	body = rewriteOfficialImports(body, context.ModulePath, context.JavaRuntimeImport)
 	enumErrorAlias, enumNeedsErrorImport := enumErrorImport(file)
 	enumJSONAlias, enumNeedsJSONImport := enumJSONImport(file)
 	enumDriverAlias, enumNeedsDriverImport := enumDriverImport(file)
@@ -943,10 +948,13 @@ func transformStaticTemplateCalls(src string, context constructorContext) (strin
 }
 
 type generatedImport struct {
-	Alias string
-	Path  string
-	Start int
-	End   int
+	Alias         string
+	ExplicitAlias bool
+	Path          string
+	Start         int
+	End           int
+	PathStart     int
+	PathEnd       int
 }
 
 func generatedImports(body string) ([]generatedImport, int, bool) {
@@ -983,7 +991,11 @@ func generatedImports(body string) ([]generatedImport, int, bool) {
 				if name != nil {
 					alias = name.Name
 				}
-				imports = append(imports, generatedImport{Alias: alias, Path: importPath, Start: start, End: tokens[close].Span.End})
+				imports = append(imports, generatedImport{
+					Alias: alias, ExplicitAlias: name != nil, Path: importPath,
+					Start: start, End: tokens[close].Span.End,
+					PathStart: tokens[pathIndex].Span.Start, PathEnd: tokens[pathIndex].Span.End,
+				})
 				cursor = nextSignificantToken(tokens, after)
 			}
 			lastEnd = tokens[close].Span.End
@@ -1002,7 +1014,11 @@ func generatedImports(body string) ([]generatedImport, int, bool) {
 		if name != nil {
 			alias = name.Name
 		}
-		imports = append(imports, generatedImport{Alias: alias, Path: importPath, Start: start, End: tokens[pathIndex].Span.End})
+		imports = append(imports, generatedImport{
+			Alias: alias, ExplicitAlias: name != nil, Path: importPath,
+			Start: start, End: tokens[pathIndex].Span.End,
+			PathStart: tokens[pathIndex].Span.Start, PathEnd: tokens[pathIndex].Span.End,
+		})
 		lastEnd = tokens[pathIndex].Span.End
 		index = after - 1
 	}
@@ -1136,8 +1152,8 @@ func rewriteLogicalPackageImports(body string, imports []ImportDecl, modulePath 
 	return body
 }
 
-func rewriteOfficialImports(body, modulePath string) string {
-	if modulePath == "" {
+func rewriteOfficialImports(body, modulePath, javaRuntimeImport string) string {
+	if modulePath == "" && javaRuntimeImport == "" {
 		return body
 	}
 	imports, _, ok := generatedImports(body)
@@ -1151,16 +1167,18 @@ func rewriteOfficialImports(body, modulePath string) string {
 	}
 	edits := []edit{}
 	for _, spec := range imports {
-		if !strings.HasPrefix(spec.Path, "gpp/") {
+		var replacement string
+		if spec.Path == javaRuntimePackage && javaRuntimeImport != "" {
+			replacement = strconv.Quote(javaRuntimeImport)
+			if !spec.ExplicitAlias {
+				replacement = spec.Alias + " " + replacement
+			}
+		} else if modulePath != "" && strings.HasPrefix(spec.Path, "gpp/") {
+			replacement = strconv.Quote(modulePath + "/" + spec.Path)
+		} else {
 			continue
 		}
-		pathStart := strings.Index(body[spec.Start:spec.End], strconv.Quote(spec.Path))
-		if pathStart < 0 {
-			continue
-		}
-		start := spec.Start + pathStart
-		end := start + len(strconv.Quote(spec.Path))
-		edits = append(edits, edit{start: start, end: end, text: strconv.Quote(modulePath + "/" + spec.Path)})
+		edits = append(edits, edit{start: spec.PathStart, end: spec.PathEnd, text: replacement})
 	}
 	sort.Slice(edits, func(i, j int) bool { return edits[i].start > edits[j].start })
 	for _, change := range edits {

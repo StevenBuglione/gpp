@@ -28,7 +28,7 @@ func TestGeneratedImportHelpersUseLosslessTokens(t *testing.T) {
 	if strings.Index(inserted, "import \"os\"") > strings.Index(inserted, "func main") {
 		t.Fatalf("insertion was not placed after the import group: %q", inserted)
 	}
-	rewritten := rewriteOfficialImports(body, "example.test/app")
+	rewritten := rewriteOfficialImports(body, "example.test/app", "")
 	if !strings.Contains(rewritten, `"example.test/app/gpp/http"`) {
 		t.Fatalf("official import was not rewritten from token spans: %q", rewritten)
 	}

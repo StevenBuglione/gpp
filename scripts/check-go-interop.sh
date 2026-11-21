@@ -16,6 +16,7 @@ done
 cp -R "$repo_root/tests/testdata/go-interop/." "$temp_root"
 cp -R "$repo_root/examples/mixed" "$temp_root/mixed"
 cp -R "$repo_root/ports/spring-framework" "$temp_root/spring-framework"
+cp -R "$repo_root/ports/spring-boot" "$temp_root/spring-boot"
 
 assert_output() {
     local expected="$1"
@@ -55,6 +56,13 @@ assert_output() {
 
     printf '%s\n' 'Checking the Spring Framework port outside the GPP checkout'
     GPP="$gpp" "$temp_root/spring-framework/scripts/check.sh"
+
+    printf '%s\n' 'Checking independent Spring Boot and Framework modules in one Go process'
+    (
+        cd "$temp_root/spring-framework"
+        "$gpp" compile -output "$temp_root/framework-go" ./spring-core ./spring-jdbc
+    )
+    GPP="$gpp" "$temp_root/spring-boot/scripts/check.sh" "$temp_root/framework-go"
 
     printf '%s\n' 'Checking native rebuilds after a resource change'
     for _attempt in 1 2; do

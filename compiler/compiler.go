@@ -20,7 +20,9 @@ import (
 )
 
 type CompileOptions struct {
-	ModulePath        string
+	ModulePath string
+	// JavaRuntimeImport resolves gpp/java to an existing external Go package.
+	JavaRuntimeImport string
 	ProjectRoot       string
 	Development       bool
 	NoPrelude         bool
@@ -85,6 +87,9 @@ func availableImportsForFile(file *File, model *SemanticModel, modulePath string
 }
 
 func CompileFilesWithOptions(files []string, outputDir string, options CompileOptions) error {
+	if err := validateJavaRuntimeImport(options); err != nil {
+		return err
+	}
 	if options.CleanOutput {
 		if err := cleanGeneratedOutput(outputDir); err != nil {
 			return err
@@ -112,6 +117,9 @@ func CompileFilesWithOptions(files []string, outputDir string, options CompileOp
 func CompileProgramWithOptions(program *Program, outputDir string, options CompileOptions) error {
 	if program == nil {
 		return fmt.Errorf("cannot compile a nil program")
+	}
+	if err := validateJavaRuntimeImport(options); err != nil {
+		return err
 	}
 	if options.CleanOutput {
 		if err := cleanGeneratedOutput(outputDir); err != nil {
@@ -196,7 +204,18 @@ func CompileProgramWithOptions(program *Program, outputDir string, options Compi
 	if err != nil {
 		return err
 	}
-	outputNames := generatedOutputNames(program.Files)
+	// Keep the bundled Java API in the semantic model so source imports still
+	// resolve. The selected provider owns the Go types and runtime state.
+	emissionFiles := program.Files
+	if options.JavaRuntimeImport != "" {
+		emissionFiles = make([]*File, 0, len(program.Files))
+		for _, file := range program.Files {
+			if file.OfficialPackage != javaRuntimePackage {
+				emissionFiles = append(emissionFiles, file)
+			}
+		}
+	}
+	outputNames := generatedOutputNames(emissionFiles)
 
 	if options.ModulePath != "" {
 		if err := ensureGoModule(outputDir, options.ModulePath, options.IncrementalOutput); err != nil {
@@ -213,7 +232,7 @@ func CompileProgramWithOptions(program *Program, outputDir string, options Compi
 	}
 	preludeExtensionsNeeded := map[string]map[string]bool{}
 	if !options.NoPrelude {
-		for _, file := range program.Files {
+		for _, file := range emissionFiles {
 			used, err := preludeExtensionsUsedInFile(file)
 			if err != nil {
 				return err
@@ -232,7 +251,7 @@ func CompileProgramWithOptions(program *Program, outputDir string, options Compi
 	reusePackage := make(map[string]bool, len(packageFingerprints))
 	for packageName, fingerprint := range packageFingerprints {
 		previous, exists := previousPackages[packageName]
-		if exists && previous.Fingerprint == fingerprint && generatedPackageFilesMatch(outputDir, previous.Files, program.Files, outputNames, packageName) {
+		if exists && previous.Fingerprint == fingerprint && generatedPackageFilesMatch(outputDir, previous.Files, emissionFiles, outputNames, packageName) {
 			packageOutputs[packageName] = previous
 			reusePackage[packageName] = true
 		}
@@ -246,9 +265,9 @@ func CompileProgramWithOptions(program *Program, outputDir string, options Compi
 		}
 	}
 
-	fileEmbeds := make(map[*File][]compiledEmbed, len(program.Files))
-	fileOutputPaths := make(map[*File]string, len(program.Files))
-	for _, file := range program.Files {
+	fileEmbeds := make(map[*File][]compiledEmbed, len(emissionFiles))
+	fileOutputPaths := make(map[*File]string, len(emissionFiles))
+	for _, file := range emissionFiles {
 		dir := generatedPackageDirectory(outputDir, file.Package)
 		fileOutputPaths[file] = filepath.Join(dir, outputNames[file])
 		embeds, err := prepareEmbeds(file, dir, options.ProjectRoot)
@@ -281,7 +300,7 @@ func CompileProgramWithOptions(program *Program, outputDir string, options Compi
 
 	packageFiles := map[string][]*File{}
 	packageOrder := []string{}
-	for _, file := range program.Files {
+	for _, file := range emissionFiles {
 		if packageFiles[file.Package] == nil {
 			packageOrder = append(packageOrder, file.Package)
 		}
@@ -495,6 +514,7 @@ func emitPackageFiles(files []*File, outputDir string, options CompileOptions, m
 		context.Package = packageName
 		context.AtExit = packageName == "main" && atExit
 		context.ModulePath = options.ModulePath
+		context.JavaRuntimeImport = options.JavaRuntimeImport
 		context.Development = options.Development
 		context.AvailableImports = availableImportsForFile(file, model, options.ModulePath)
 		context.ImportedFunctionSignatures = map[string]map[string][]callableSignature{}
@@ -609,6 +629,7 @@ func generatedPackageFingerprints(program *Program, model *SemanticModel, option
 		sort.Strings(dependencies)
 		h := sha256.New()
 		writePackageHashPart(h, "module="+options.ModulePath)
+		writePackageHashPart(h, "java-runtime-import="+options.JavaRuntimeImport)
 		writePackageHashPart(h, "project-root="+options.ProjectRoot)
 		writePackageHashPart(h, fmt.Sprintf("development=%t", options.Development))
 		writePackageHashPart(h, fmt.Sprintf("no-prelude=%t", options.NoPrelude))

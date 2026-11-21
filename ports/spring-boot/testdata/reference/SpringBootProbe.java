@@ -8,6 +8,7 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.SpringBootConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
+import org.springframework.boot.diagnostics.FailureAnalysis;
 import org.springframework.context.annotation.Bean;
 import org.springframework.core.annotation.AliasFor;
 import org.springframework.core.annotation.AnnotatedElementUtils;
@@ -130,6 +131,16 @@ public class SpringBootProbe {
     }
 
     public static void main(String[] args) {
+        var description = new String(new char[]{0x0069, 0x0000, 0xd800});
+        var action = new String("check the connection");
+        var cause = new IllegalArgumentException("invalid parameter");
+        var analysis = new FailureAnalysis(description, action, cause);
+        require(analysis.getDescription() == description && analysis.getAction() == action && analysis.getCause() == cause,
+            "failure-analysis input identity");
+        var unnamed = new FailureAnalysis(null, null, null);
+        require(unnamed.getDescription() == "" && unnamed.getAction() == null && unnamed.getCause() == null,
+            "failure-analysis null inputs");
+
         var application = new SpringApplication(Configuration.class);
         application.setWebApplicationType(WebApplicationType.NONE);
         application.setBannerMode(Banner.Mode.OFF);

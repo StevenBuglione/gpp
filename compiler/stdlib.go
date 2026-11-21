@@ -17,6 +17,31 @@ import (
 //go:embed stdlib/gpp/*/*.gpp stdlib/gpp/exp/*/*.gpp stdlib/gpp/http/assets/swagger/*
 var officialStdlib embed.FS
 
+const javaRuntimePackage = "gpp/java"
+
+func validateJavaRuntimeImport(options CompileOptions) error {
+	importPath := options.JavaRuntimeImport
+	if importPath == "" {
+		return nil
+	}
+	if !isModulePath(importPath) || path.Clean(importPath) != importPath ||
+		strings.HasPrefix(importPath, "../") || strings.HasPrefix(importPath, "gpp/") {
+		return fmt.Errorf("Java runtime import must be an external Go import path, got %q", importPath)
+	}
+	for _, char := range importPath {
+		switch {
+		case char >= 'A' && char <= 'Z', char >= 'a' && char <= 'z', char >= '0' && char <= '9',
+			char == '.', char == '-', char == '_', char == '~', char == '/':
+		default:
+			return fmt.Errorf("invalid character in Java runtime import path %q", importPath)
+		}
+	}
+	if importPath == options.ModulePath+"/"+javaRuntimePackage {
+		return fmt.Errorf("external Java runtime import %q is the generated module's own runtime", importPath)
+	}
+	return nil
+}
+
 // EmbeddedStdlibAvailable reports whether the compiler was built with its
 // compiler-owned GPP standard library resources.
 func EmbeddedStdlibAvailable() bool {
@@ -31,7 +56,7 @@ func EmbeddedStdlibAvailable() bool {
 // OfficialStdlibPackages returns the compiler-shipped GPP package paths that
 // can be inspected by source-level tooling such as `gpp doc`.
 func OfficialStdlibPackages() []string {
-	return []string{"gpp/container", "gpp/cron", "gpp/encoding", "gpp/exp/http", "gpp/exp/queue", "gpp/http", "gpp/java", "gpp/orm", "gpp/sql", "gpp/std", "gpp/test", "gpp/tpl"}
+	return []string{"gpp/container", "gpp/cron", "gpp/encoding", "gpp/exp/http", "gpp/exp/queue", "gpp/http", javaRuntimePackage, "gpp/orm", "gpp/sql", "gpp/std", "gpp/test", "gpp/tpl"}
 }
 
 // LoadOfficialPackage exposes the embedded source model to documentation and

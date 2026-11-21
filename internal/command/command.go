@@ -34,15 +34,16 @@ func gppVersion() string {
 const minimumGoMinor = 27
 
 type compileFlags struct {
-	module      string
-	output      string
-	development bool
-	noPrelude   bool
-	noStdlib    bool
-	warnings    bool
-	emitGo      bool
-	binaryPath  string
-	test        testSelection
+	module            string
+	javaRuntimeImport string
+	output            string
+	development       bool
+	noPrelude         bool
+	noStdlib          bool
+	warnings          bool
+	emitGo            bool
+	binaryPath        string
+	test              testSelection
 }
 
 type testSelection struct {
@@ -210,6 +211,7 @@ func commandHelp(name string) int {
 
 func printCompileFlags() {
 	fmt.Println("  -module path      module path for generated Go code")
+	fmt.Println("  -java-runtime-import path  use an external Go package for gpp/java")
 	fmt.Println("  -output directory generated workspace (default: system cache)")
 	fmt.Println("  GPP_CACHE         environment variable for the cache root")
 	fmt.Println("  -no-prelude       disable the implicit GPP prelude")
@@ -223,6 +225,7 @@ func parseCompileFlags(name string, args []string, allowOutputBinary bool) (comp
 	flags.SetOutput(os.Stderr)
 	result := compileFlags{}
 	flags.StringVar(&result.module, "module", "generated", "module path for generated Go code")
+	flags.StringVar(&result.javaRuntimeImport, "java-runtime-import", "", "use an external Go package for gpp/java")
 	flags.StringVar(&result.output, "output", "", "directory for generated Go code (defaults to the system cache)")
 	flags.BoolVar(&result.noPrelude, "no-prelude", false, "disable the implicit GPP prelude")
 	flags.BoolVar(&result.noStdlib, "no-stdlib", false, "disable bundled official GPP packages")
@@ -267,9 +270,14 @@ func reorderCompileArgs(args []string, allowOutputBinary, testing bool) []string
 			positional = append(positional, args[index:]...)
 			break
 		}
+		if !strings.HasPrefix(arg, "-") {
+			positional = append(positional, arg)
+			continue
+		}
 		name := strings.TrimPrefix(arg, "--")
 		name = strings.TrimPrefix(name, "-")
-		known := name == "module" || name == "output" || name == "no-prelude" || name == "no-stdlib" || name == "warnings" || (allowOutputBinary && (name == "o" || name == "emit-go"))
+		name, _, _ = strings.Cut(name, "=")
+		known := name == "module" || name == "java-runtime-import" || name == "output" || name == "no-prelude" || name == "no-stdlib" || name == "warnings" || (allowOutputBinary && (name == "o" || name == "emit-go"))
 		if testing {
 			known = known || name == "suite" || name == "tag" || name == "tags-all" || name == "priority" || name == "run" || name == "list" || name == "fail-fast" || name == "cover" || name == "race"
 		}
@@ -278,7 +286,7 @@ func reorderCompileArgs(args []string, allowOutputBinary, testing bool) []string
 			continue
 		}
 		flags = append(flags, arg)
-		if name == "module" || name == "output" || name == "suite" || name == "tag" || name == "tags-all" || name == "priority" || name == "run" || (allowOutputBinary && name == "o") {
+		if name == "module" || name == "java-runtime-import" || name == "output" || name == "suite" || name == "tag" || name == "tags-all" || name == "priority" || name == "run" || (allowOutputBinary && name == "o") {
 			if index+1 < len(args) && !strings.Contains(arg, "=") {
 				index++
 				flags = append(flags, args[index])
@@ -374,7 +382,8 @@ func runBuild(args []string) int {
 	if err != nil {
 		return reportError(err)
 	}
-	if !cachedArtifact(options.output, absoluteBinary, artifactKey) {
+	// Let Go track the provider's sources, including edits to local replacements.
+	if options.javaRuntimeImport != "" || !cachedArtifact(options.output, absoluteBinary, artifactKey) {
 		if err := runGoCommand(options.output, "build", "-o", absoluteBinary, "."); err != nil {
 			return reportError(err)
 		}
@@ -569,6 +578,7 @@ func compileSources(sources []string, options compileFlags, clean bool, includeT
 	if !state.Hit {
 		if err := compiler.CompileFilesWithOptions(sources, options.output, compiler.CompileOptions{
 			ModulePath:        options.module,
+			JavaRuntimeImport: options.javaRuntimeImport,
 			ProjectRoot:       projectRoot,
 			Development:       options.development,
 			NoPrelude:         options.noPrelude,
