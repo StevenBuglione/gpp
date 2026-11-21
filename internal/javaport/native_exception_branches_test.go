@@ -289,7 +289,7 @@ func main() {
 	}
 }
 
-func TestNativeExceptionBranchesKeepFinallyTransferDiagnostic(t *testing.T) {
+func TestNativeExceptionBranchesKeepFinallyGotoDiagnostic(t *testing.T) {
 	root := t.TempDir()
 	source := filepath.Join(root, "main.gpp")
 	writeTestFile(t, source, `package main
@@ -298,14 +298,15 @@ func main() {
     Outer: for {
         try {} finally {
             if true {
-                { break Outer }
+                { goto Outside }
             }
         }
     }
+    Outside: println("outside")
 }`)
 	err := compiler.CompileFilesWithOptions([]string{source}, filepath.Join(root, "output"),
 		compiler.CompileOptions{ModulePath: "example.com/exception-branches-diagnostic"})
-	if err == nil || !strings.Contains(err.Error(), "control transfer from finally is not allowed: break") {
-		t.Fatalf("expected finally transfer diagnostic, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "control transfer from finally is not allowed: goto") {
+		t.Fatalf("expected finally goto diagnostic, got %v", err)
 	}
 }

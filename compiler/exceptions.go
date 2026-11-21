@@ -62,6 +62,14 @@ func __gppUnwrapThrown(recovered any) (error, bool) { return %s(recovered) }
 	values []any
 }
 
+func __gppExceptionResult[T any](value any) T {
+	if value == nil {
+		var zero T
+		return zero
+	}
+	return value.(T)
+}
+
 func __gppRun(block func()) {
 	block()
 }
@@ -1854,21 +1862,10 @@ func lowerExceptionResultBoundaryNode(body *ast.BlockStmt, fields []exceptionRes
 	}
 	for index, field := range fields {
 		value := &ast.IndexExpr{X: selector(returned, "values"), Index: &ast.BasicLit{Kind: token.INT, Value: fmt.Sprintf("%d", index)}}
-		assignment := &ast.AssignStmt{
+		returnBody = append(returnBody, &ast.AssignStmt{
 			Lhs: []ast.Expr{ast.NewIdent(field.name)}, Tok: token.ASSIGN,
-			Rhs: []ast.Expr{&ast.TypeAssertExpr{X: value, Type: fieldTypes[index]}},
-		}
-		if exceptionResultFieldType(field) == "error" {
-			returnBody = append(returnBody, &ast.IfStmt{
-				Cond: &ast.BinaryExpr{X: value, Op: token.EQL, Y: ast.NewIdent("nil")},
-				Body: &ast.BlockStmt{List: []ast.Stmt{&ast.AssignStmt{
-					Lhs: []ast.Expr{ast.NewIdent(field.name)}, Tok: token.ASSIGN, Rhs: []ast.Expr{ast.NewIdent("nil")},
-				}}},
-				Else: &ast.BlockStmt{List: []ast.Stmt{assignment}},
-			})
-		} else {
-			returnBody = append(returnBody, assignment)
-		}
+			Rhs: []ast.Expr{call(&ast.IndexExpr{X: ast.NewIdent("__gppExceptionResult"), Index: fieldTypes[index]}, value)},
+		})
 	}
 	returnBody = append(returnBody, &ast.ReturnStmt{})
 	isErrorBoundary := exceptionResultFieldType(fields[len(fields)-1]) == "error"
@@ -1915,8 +1912,50 @@ func lowerExceptionResultBoundaryNode(body *ast.BlockStmt, fields []exceptionRes
 	if marker := exceptionGeneratedLineMarker(); marker != nil {
 		statements = append(statements, marker)
 	}
+	if packer := hoistExceptionReturnPacker(body, used); packer != nil {
+		statements = append(statements, packer)
+	}
 	statements = append(statements, &ast.ReturnStmt{Results: []ast.Expr{&ast.CallExpr{Fun: closure}}})
 	return &ast.BlockStmt{List: statements}, nil
+}
+
+func hoistExceptionReturnPacker(body *ast.BlockStmt, used map[string]bool) ast.Stmt {
+	var packer *ast.FuncLit
+	var name string
+	ast.Inspect(body, func(node ast.Node) bool {
+		returned, ok := node.(*ast.CompositeLit)
+		if !ok || len(returned.Elts) != 1 {
+			return true
+		}
+		kind, ok := returned.Type.(*ast.Ident)
+		if !ok || kind.Name != "__gppExceptionReturn" {
+			return true
+		}
+		entry, ok := returned.Elts[0].(*ast.KeyValueExpr)
+		if !ok {
+			return true
+		}
+		pack, ok := entry.Value.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		function, ok := pack.Fun.(*ast.FuncLit)
+		if !ok {
+			return true
+		}
+		// The packer needs to resolve result types in the signature's
+		// scope, before the user body can shadow those type names.
+		if packer == nil {
+			packer = function
+			name = nextExceptionName(used, "__gppPackExceptionReturn")
+		}
+		pack.Fun = ast.NewIdent(name)
+		return true
+	})
+	if packer == nil {
+		return nil
+	}
+	return &ast.AssignStmt{Lhs: []ast.Expr{ast.NewIdent(name)}, Tok: token.DEFINE, Rhs: []ast.Expr{packer}}
 }
 
 func exceptionGeneratedLineMarker() ast.Stmt {
@@ -1928,6 +1967,11 @@ func lowerExceptionGoStmtNode(statement Stmt, context constructorContext, rethro
 		return nil, nil
 	}
 	switch value := statement.(type) {
+	case *ReturnStmt:
+		if err := lowerExceptionStmtNodes(value, context); err != nil {
+			return nil, err
+		}
+		return goExceptionReturnNode(value, exceptionReturnTypes(context))
 	case *ExpressionStmt:
 		if delegated, handled, err := lowerExplicitInitializerStatement(value.Expression, context); handled {
 			if err != nil {
@@ -2127,6 +2171,26 @@ func lowerExceptionGoStmtNode(statement Stmt, context constructorContext, rethro
 		}
 		return goExceptionStmtNode(statement, rethrowName)
 	}
+}
+
+func exceptionReturnTypes(context constructorContext) []ast.Expr {
+	fields, ok := exceptionResultFieldsFromTypeNode(context.CurrentResultAST)
+	if !ok || len(fields) == 0 {
+		return nil
+	}
+	result := make([]ast.Expr, 0, len(fields))
+	for _, field := range fields {
+		typeNode, ok := transformPolymorphicTypeNode(field.typeNode, context)
+		if !ok {
+			return nil
+		}
+		expr, err := goTypeExpr(typeNode)
+		if err != nil {
+			return nil
+		}
+		result = append(result, expr)
+	}
+	return result
 }
 
 func lowerExceptionBlockNodes(block *BlockStmt, context constructorContext) error {
@@ -3071,16 +3135,11 @@ func validateFinallyControlTransfersBlock(block *BlockStmt) error {
 		switch value := statement.(type) {
 		case *BlockStmt:
 			visitBlock(value)
-		case *ReturnStmt:
-			result = fmt.Errorf("control transfer from finally is not allowed: return")
 		case *BranchStmt:
-			if value.Keyword == "break" || value.Keyword == "continue" || value.Keyword == "goto" {
+			if value.Keyword == "goto" {
 				result = fmt.Errorf("control transfer from finally is not allowed: %s", value.Keyword)
 			}
 		case *TokenStmt:
-			if value.Kind == BodyStmtReturn {
-				result = fmt.Errorf("control transfer from finally is not allowed: return")
-			}
 			visitBlock(value.Body)
 			for _, child := range value.Children {
 				visitStmt(child)
@@ -3111,6 +3170,7 @@ func lowerTryASTNode(tryBlock *ast.BlockStmt, clauses []catchClause, finallyBloc
 	branches := lowerTryBranchTransfers(tryBlock, clauses)
 	deferBody := []ast.Stmt{}
 	if hasFinally {
+		branches.rewriteFinally(finallyBlock)
 		deferBody = append(deferBody, &ast.DeferStmt{Call: &ast.CallExpr{
 			Fun: &ast.FuncLit{
 				Type: &ast.FuncType{Params: &ast.FieldList{}},
@@ -3453,13 +3513,13 @@ func call(function ast.Expr, arguments ...ast.Expr) *ast.CallExpr {
 }
 
 func rewriteExceptionReturns(body string, context constructorContext) (string, error) {
-	if transformed, handled, err := rewriteExceptionReturnsAST(body); handled {
+	if transformed, handled, err := rewriteExceptionReturnsAST(body, exceptionReturnTypes(context)...); handled {
 		return transformed, err
 	}
 	return body, nil
 }
 
-func rewriteExceptionReturnsAST(body string) (string, bool, error) {
+func rewriteExceptionReturnsAST(body string, resultTypes ...ast.Expr) (string, bool, error) {
 	tokens, err := LexSource("exception returns", body)
 	if err != nil {
 		return body, false, nil
@@ -3529,7 +3589,7 @@ func rewriteExceptionReturnsAST(body string) (string, bool, error) {
 	}
 	edits := make([]edit, 0, len(returns))
 	for _, statement := range returns {
-		lowered, lowerErr := goExceptionStmtNode(statement, "")
+		lowered, lowerErr := goExceptionReturnNode(statement, resultTypes)
 		if lowerErr != nil || len(lowered) != 1 {
 			return body, false, nil
 		}
@@ -4465,12 +4525,14 @@ func transformExceptionABIBoundaries(src string, context constructorContext) (st
 		}
 		bodyText := src[bodyStart:bodyEnd]
 		hasExceptionReturn := strings.Contains(bodyText, "__gppExceptionReturn")
+		methodContext := context
+		methodContext.CurrentResultAST = methodResultTypeNode(function.Method)
 		fields, hasResults := exceptionResultFieldsForResult(function.Method.ResultAST, function.Method.ResultFieldsAST)
 		if !hasResults || len(fields) == 0 {
 			if !hasExceptionReturn {
 				continue
 			}
-			bodyText, _ = rewriteExceptionReturns(bodyText, context)
+			bodyText, _ = rewriteExceptionReturns(bodyText, methodContext)
 			replacements = append(replacements, replacement{
 				start: bodyStart,
 				end:   bodyEnd,
@@ -4483,7 +4545,7 @@ func transformExceptionABIBoundaries(src string, context constructorContext) (st
 			continue
 		}
 		if hasExceptionReturn {
-			bodyText, _ = rewriteExceptionReturns(bodyText, context)
+			bodyText, _ = rewriteExceptionReturns(bodyText, methodContext)
 		}
 		for index := range fields {
 			if fields[index].name == "" || fields[index].name == "_" {
@@ -4920,11 +4982,9 @@ func exceptionBoundaryOpening(fields []exceptionResultField, recoverName, thrown
 	out.WriteString("if len(__gppReturned.values) == 0 { return }\n")
 	for index, field := range fields {
 		out.WriteString(field.name)
-		out.WriteString(" = __gppReturned.values[")
-		out.WriteString(fmt.Sprintf("%d", index))
-		out.WriteString("].(")
+		out.WriteString(" = __gppExceptionResult[")
 		out.WriteString(exceptionResultFieldType(field))
-		out.WriteString(")\n")
+		out.WriteString(fmt.Sprintf("](__gppReturned.values[%d])\n", index))
 	}
 	out.WriteString("return\n")
 	out.WriteString("}\n")
@@ -4984,11 +5044,9 @@ func exceptionReturnBoundaryOpening(fields []exceptionResultField, recoverName, 
 	out.WriteString("if len(__gppReturned.values) == 0 { return }\n")
 	for index, field := range fields {
 		out.WriteString(field.name)
-		out.WriteString(" = __gppReturned.values[")
-		out.WriteString(fmt.Sprintf("%d", index))
-		out.WriteString("].(")
+		out.WriteString(" = __gppExceptionResult[")
 		out.WriteString(exceptionResultFieldType(field))
-		out.WriteString(")\n")
+		out.WriteString(fmt.Sprintf("](__gppReturned.values[%d])\n", index))
 	}
 	out.WriteString("}\n")
 	out.WriteString("}()\n")

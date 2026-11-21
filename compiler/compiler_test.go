@@ -3025,7 +3025,8 @@ func main() {
 func main() {
     try {
     } finally {
-        return
+        goto Done
+        Done: println("done")
     }
 }
 `)

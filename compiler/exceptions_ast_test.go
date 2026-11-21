@@ -349,8 +349,8 @@ func TestFinallyControlTransfersUseBodyAST(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := validateFinallyControlTransfersBlock(returnBlock); err == nil || !strings.Contains(err.Error(), "return") {
-		t.Fatalf("expected AST finally validation error, err=%v", err)
+	if err := validateFinallyControlTransfersBlock(returnBlock); err != nil {
+		t.Fatalf("unexpected AST finally return diagnostic: %v", err)
 	}
 	cleanupTokens, err := LexSource("finally-cleanup", "cleanup()\n")
 	if err != nil {

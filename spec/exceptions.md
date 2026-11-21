@@ -1100,24 +1100,14 @@ Do not add that complexity initially.
 
 # Control Transfer From Finally
 
-For v1, disallow:
+A `finally` block can return from the enclosing function or use a
+`break` or `continue` that leaves the block. A transfer from `finally`
+takes precedence over a pending return, branch, exception, or Go panic.
+Normal completion of `finally` lets the pending operation continue.
+Branches with targets inside the block follow ordinary Go control flow.
 
-```text
-return
-break
-continue
-goto
-```
-
-from inside `finally`.
-
-Suggested diagnostic:
-
-```text
-control transfer from finally is not allowed
-```
-
-This avoids unintentionally suppressing propagation and simplifies lowering.
+Source `goto` inside `finally` is rejected with the diagnostic
+`control transfer from finally is not allowed: goto`.
 
 ---
 

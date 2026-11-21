@@ -7,8 +7,9 @@ import (
 )
 
 type tryBranchTransfers struct {
-	state     *ast.Ident
-	transfers []*ast.BranchStmt
+	state       *ast.Ident
+	finallyExit *ast.Ident
+	transfers   []*ast.BranchStmt
 }
 
 type tryBranchTarget struct {
@@ -28,6 +29,27 @@ func lowerTryBranchTransfers(body *ast.BlockStmt, clauses []catchClause) tryBran
 		}
 	}
 	return branches
+}
+
+func (branches *tryBranchTransfers) rewriteFinally(block *ast.BlockStmt) {
+	earlierTransfers := len(branches.transfers)
+	branches.finallyExit = ast.NewIdent("")
+	branches.rewriteList(block.List, nil)
+	if len(branches.transfers) == earlierTransfers {
+		branches.finallyExit = nil
+		return
+	}
+	// A branch exits this deferred function through a common epilogue that
+	// discards the pending panic (a return or throw). Run recover there,
+	// outside the source block, so source locals cannot shadow the builtin.
+	block.List = []ast.Stmt{
+		&ast.BlockStmt{List: block.List},
+		&ast.ReturnStmt{},
+		&ast.LabeledStmt{
+			Label: branches.finallyExit,
+			Stmt:  &ast.ExprStmt{X: call(identifier("recover"))},
+		},
+	}
 }
 
 func (branches *tryBranchTransfers) rewriteList(statements []ast.Stmt, targets []tryBranchTarget) {
@@ -77,7 +99,11 @@ func (branches *tryBranchTransfers) rewrite(statement ast.Stmt, targets []tryBra
 			}
 		}
 		branches.transfers = append(branches.transfers, node)
-		return &ast.BlockStmt{List: []ast.Stmt{branches.assign(len(branches.transfers)), &ast.ReturnStmt{}}}
+		exit := ast.Stmt(&ast.ReturnStmt{})
+		if branches.finallyExit != nil {
+			exit = &ast.BranchStmt{Tok: token.GOTO, Label: branches.finallyExit}
+		}
+		return &ast.BlockStmt{List: []ast.Stmt{branches.assign(len(branches.transfers)), exit}}
 	}
 	return statement
 }
@@ -102,9 +128,9 @@ func (branches tryBranchTransfers) dispatchAfter(run ast.Stmt) ast.Stmt {
 		}
 		return true
 	})
-	branches.state.Name = "__gppTryBranch"
-	for names[branches.state.Name] {
-		branches.state.Name += "_"
+	branches.state.Name = nextExceptionName(names, "__gppTryBranch")
+	if branches.finallyExit != nil {
+		branches.finallyExit.Name = nextExceptionName(names, "__gppFinallyExit")
 	}
 	declaration := &ast.AssignStmt{
 		Lhs: []ast.Expr{branches.state}, Tok: token.DEFINE,

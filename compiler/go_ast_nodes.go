@@ -886,19 +886,7 @@ func attachGoLabels(labels []*ast.LabeledStmt, statement ast.Stmt) ast.Stmt {
 
 func goExceptionStmtNode(statement Stmt, rethrowName string) ([]ast.Stmt, error) {
 	if value, ok := statement.(*ReturnStmt); ok {
-		values := make([]ast.Expr, 0, len(value.Values))
-		for _, expression := range value.Values {
-			lowered, err := goExprNode(expression)
-			if err != nil {
-				return nil, err
-			}
-			values = append(values, lowered)
-		}
-		panicValue := &ast.CompositeLit{Type: ast.NewIdent("__gppExceptionReturn")}
-		if len(values) > 0 {
-			panicValue.Elts = []ast.Expr{&ast.KeyValueExpr{Key: ast.NewIdent("values"), Value: &ast.CompositeLit{Type: &ast.ArrayType{Elt: ast.NewIdent("any")}, Elts: values}}}
-		}
-		return []ast.Stmt{&ast.ExprStmt{X: &ast.CallExpr{Fun: ast.NewIdent("panic"), Args: []ast.Expr{panicValue}}}}, nil
+		return goExceptionReturnNode(value, nil)
 	}
 	switch value := statement.(type) {
 	case *IfStmt:
@@ -1052,6 +1040,40 @@ func goExceptionStmtNode(statement Stmt, rethrowName string) ([]ast.Stmt, error)
 	default:
 		return goStmtNode(statement, rethrowName)
 	}
+}
+
+func goExceptionReturnNode(statement *ReturnStmt, resultTypes []ast.Expr) ([]ast.Stmt, error) {
+	values := make([]ast.Expr, 0, len(statement.Values))
+	for _, expression := range statement.Values {
+		lowered, err := goExprNode(expression)
+		if err != nil {
+			return nil, err
+		}
+		values = append(values, lowered)
+	}
+	panicValue := &ast.CompositeLit{Type: ast.NewIdent("__gppExceptionReturn")}
+	if len(values) != 0 {
+		items := &ast.CompositeLit{Type: &ast.ArrayType{Elt: ast.NewIdent("any")}, Elts: values}
+		var packed ast.Expr = items
+		if len(resultTypes) != 0 {
+			// Passing these values to a typed parameter applies the same
+			// assignability rules as an ordinary return before boxing them.
+			// A single multi-result call can supply all the parameters.
+			parameters := &ast.FieldList{}
+			items.Elts = make([]ast.Expr, 0, len(resultTypes))
+			for index, resultType := range resultTypes {
+				name := ast.NewIdent(fmt.Sprintf("__gppReturnValue%d", index))
+				parameters.List = append(parameters.List, &ast.Field{Names: []*ast.Ident{name}, Type: resultType})
+				items.Elts = append(items.Elts, name)
+			}
+			packed = call(&ast.FuncLit{
+				Type: &ast.FuncType{Params: parameters, Results: &ast.FieldList{List: []*ast.Field{{Type: items.Type}}}},
+				Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{items}}}},
+			}, values...)
+		}
+		panicValue.Elts = []ast.Expr{&ast.KeyValueExpr{Key: ast.NewIdent("values"), Value: packed}}
+	}
+	return []ast.Stmt{&ast.ExprStmt{X: call(ast.NewIdent("panic"), panicValue)}}, nil
 }
 
 type constructorASTLiteral struct {
