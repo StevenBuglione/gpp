@@ -41,6 +41,7 @@ func (program *javaObjectProgram) emitClass(out *strings.Builder, class *javaObj
 		fmt.Fprintf(out, "\t%s\n", class.baseField())
 	} else {
 		out.WriteString("\tjavaObjectOwner any\n")
+		out.WriteString("\tjavaObjectIdentity javart.ObjectIdentity\n")
 	}
 	for _, field := range class.fields {
 		if !slices.Contains(field.Modifiers, "STATIC") {
@@ -431,6 +432,10 @@ func (ctx javaObjectContext) expression(expression *JavaExpression) (string, err
 	case "METHOD_INVOCATION":
 		return ctx.invoke(expression)
 	case "NEW_CLASS":
+		if expression.Symbol == "java.lang.Object#<init>()" {
+			ctx.program.runtime = true
+			return "javart.NewObject()", nil
+		}
 		if ctx.program.classes[expression.Type] != nil {
 			return ctx.allocateObject(expression)
 		}
@@ -443,6 +448,11 @@ func (ctx javaObjectContext) expression(expression *JavaExpression) (string, err
 		return ctx.newString(expression)
 	case "STRING_LITERAL":
 		return ctx.program.stringLiteral(expression.UTF16LE)
+	case "PLUS":
+		if expression.Type == javaStringType {
+			return ctx.concatString(expression)
+		}
+		return ctx.program.primitiveLowering.binary(expression, ctx.expression)
 	case "NULL_LITERAL":
 		return "nil", nil
 	case "EQUAL_TO", "NOT_EQUAL_TO":
@@ -503,6 +513,10 @@ func (ctx javaObjectContext) field(expression *JavaExpression) (string, error) {
 }
 
 func (ctx javaObjectContext) invoke(expression *JavaExpression) (string, error) {
+	switch expression.Symbol {
+	case "java.lang.Object#toString()", "java.lang.Object#hashCode()":
+		return ctx.invokeObjectStringMethod(expression)
+	}
 	if method := ctx.program.methods[expression.Symbol]; method != nil && method.static {
 		return ctx.callStatic(expression, method)
 	}

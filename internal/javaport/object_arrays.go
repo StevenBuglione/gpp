@@ -49,6 +49,7 @@ func (ctx javaObjectContext) arrayTypeCall(javaType, method string, arguments ..
 		return "", fmt.Errorf("unsupported Java array type %s", javaType)
 	}
 	args := append([]string{strconv.Itoa(rank)}, arguments...)
+	args = append(args, "javart.ArrayComponentDescriptor("+strconv.Quote(javaArrayComponentDescriptor(leaf))+")")
 	if class := ctx.program.classes[leaf]; class != nil {
 		for ancestor := class.parent; ancestor != nil; ancestor = ancestor.parent {
 			args = append(args, "("+ctx.program.objectGoType(ancestor.declaration.Symbol)+")(nil)")
@@ -63,6 +64,16 @@ func (ctx javaObjectContext) arrayTypeCall(javaType, method string, arguments ..
 	}
 	ctx.program.runtime = true
 	return "javart." + method + "[" + ctx.program.objectGoType(leaf) + "](" + strings.Join(args, ", ") + ")", nil
+}
+
+func javaArrayComponentDescriptor(leaf string) string {
+	if descriptor := map[string]string{
+		"boolean": "Z", "byte": "B", "short": "S", "char": "C",
+		"int": "I", "long": "J", "float": "F", "double": "D",
+	}[leaf]; descriptor != "" {
+		return descriptor
+	}
+	return "L" + leaf + ";"
 }
 
 func (ctx javaObjectContext) arrayTypeTest(operand *JavaExpression, javaType, method string) (string, error) {

@@ -84,7 +84,7 @@ func (program *javaObjectProgram) supportsRecordOperation(javaType, name, result
 		return true
 	}
 	if _, rank := program.arrayType(javaType); rank != 0 {
-		return name != "toString" || program.recordArrayDescriptor(javaType) != ""
+		return true
 	}
 	class := program.classes[javaType]
 	if class == nil {
@@ -116,27 +116,6 @@ func (ctx javaObjectContext) invokeRecordReference(expression *JavaExpression) (
 	return ctx.emitReferenceInvocation(expression, declaration, target, func(receiver, arguments string) string {
 		return receiver + "." + exportMethodName(declaration.Name) + "(" + arguments + ")"
 	})
-}
-
-func (program *javaObjectProgram) recordArrayDescriptor(javaType string) string {
-	leaf, rank := program.arrayType(javaType)
-	if rank == 0 {
-		return ""
-	}
-	descriptor := map[string]string{
-		"boolean": "Z", "byte": "B", "short": "S", "char": "C",
-		"int": "I", "long": "J", "float": "F", "double": "D",
-	}[leaf]
-	if descriptor == "" {
-		class := program.classes[leaf]
-		if leaf == javaStringType || wrapperPrimitive(leaf) != "" ||
-			(class != nil && (class.declaration.Kind == "RECORD" || slices.Contains(class.declaration.Modifiers, "FINAL"))) {
-			descriptor = "L" + leaf + ";"
-		} else {
-			return ""
-		}
-	}
-	return strings.Repeat("[", rank) + descriptor
 }
 
 func (ctx javaObjectContext) emitRecordMethod(out *strings.Builder, method *javaObjectMethod) error {
@@ -171,11 +150,7 @@ func (ctx javaObjectContext) emitRecordMethod(out *strings.Builder, method *java
 		values := make([]string, 0, len(components))
 		for _, component := range components {
 			names = append(names, strconv.Quote(component.Name))
-			value := "this.javaField" + component.Name
-			if descriptor := ctx.program.recordArrayDescriptor(component.Type); descriptor != "" {
-				value = "javart.RecordArrayString(" + value + ", " + strconv.Quote(descriptor) + ")"
-			}
-			values = append(values, value)
+			values = append(values, "this.javaField"+component.Name)
 		}
 		fmt.Fprintf(out, "\treturn javart.RecordString(%q, []string{%s}", class.declaration.Name, strings.Join(names, ", "))
 		if len(values) > 0 {

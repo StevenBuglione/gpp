@@ -4,7 +4,7 @@ import (
     "fmt"
     "reflect"
     "slices"
-    "sync/atomic"
+    "strings"
 )
 
 // ArrayType records the runtime array type, including the component's actual
@@ -15,6 +15,7 @@ type ArrayType struct {
     rank int
     acceptsElement func(any) bool
     interfaceType ArrayInterfaceType
+    componentDescriptor string
 }
 
 // ArrayInterfaceType supplies nominal information for a translated interface.
@@ -24,6 +25,8 @@ type ArrayInterfaceType struct {
     Supers []string
 }
 
+type ArrayComponentDescriptor string
+
 func ArrayTypeOf[T any](rank int, ancestors ...any) ArrayType {
     arrayType := ArrayType{element: reflect.TypeFor[T](), rank: rank,
         acceptsElement: func(value any) bool {
@@ -32,6 +35,10 @@ func ArrayTypeOf[T any](rank int, ancestors ...any) ArrayType {
         },
     }
     for _, ancestor := range ancestors {
+        if name, ok := ancestor.(ArrayComponentDescriptor); ok {
+            arrayType.componentDescriptor = string(name)
+            continue
+        }
         if iface, ok := ancestor.(ArrayInterfaceType); ok {
             arrayType.interfaceType = iface
             arrayType.acceptsElement = func(value any) bool {
@@ -89,21 +96,47 @@ type Array struct {
     arrayType ArrayType
     length int32
     elements any
-    identity atomic.Uint32
+    identity ObjectIdentity
 }
 
-var nextArrayIdentity atomic.Uint32
-
 func (array *Array) identityHash() uint32 {
-    if identity := array.identity.Load(); identity != 0 {
-        return identity
+    return array.GppJavaIdentityHash()
+}
+
+func (array *Array) GppJavaIdentityHash() uint32 { return array.identity.Hash() }
+
+func (array *Array) GppJavaClassName() string {
+    descriptor := array.arrayType.componentDescriptor
+    if descriptor == "" && array.arrayType.interfaceType.Name != "" {
+        descriptor = "L" + array.arrayType.interfaceType.Name + ";"
     }
-    identity := nextArrayIdentity.Add(1)
-    if identity == 0 {
-        identity = nextArrayIdentity.Add(1)
+    if descriptor == "" {
+        descriptor = arrayTypeDescriptor(array.arrayType.element)
     }
-    array.identity.CompareAndSwap(0, identity)
-    return array.identity.Load()
+    return strings.Repeat("[", array.arrayType.rank) + descriptor
+}
+
+func arrayTypeDescriptor(element reflect.Type) string {
+    switch element {
+    case reflect.TypeFor[bool](): return "Z"
+    case reflect.TypeFor[int8](): return "B"
+    case reflect.TypeFor[int16](): return "S"
+    case reflect.TypeFor[uint16](): return "C"
+    case reflect.TypeFor[int32](): return "I"
+    case reflect.TypeFor[int64](): return "J"
+    case reflect.TypeFor[float32](): return "F"
+    case reflect.TypeFor[float64](): return "D"
+    case reflect.TypeFor[any](): return "Ljava.lang.Object;"
+    }
+    if element.Kind() == reflect.Pointer {
+        if javaType, ok := reflect.Zero(element).Interface().(interface{ GppJavaClassName() string }); ok {
+            return "L" + javaType.GppJavaClassName() + ";"
+        }
+        if isBundledJavaType(element) {
+            return "Ljava.lang." + element.Elem().Name() + ";"
+        }
+    }
+    return "L" + element.String() + ";"
 }
 
 // NewArray allocates the specified leading dimensions of an array of T.

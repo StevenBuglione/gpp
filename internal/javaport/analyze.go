@@ -301,7 +301,9 @@ func Analyze(ctx context.Context, inputs []string, options Options) (Report, err
 		strconv.Itoa(options.Release), strconv.FormatBool(options.Preview), options.ClassPath, options.ModulePath, options.Encoding, strconv.FormatBool(options.MethodBodies),
 	}, sources...)
 	var stderr bytes.Buffer
-	command := exec.CommandContext(ctx, launcher, analyzer)
+	// The compiler's attributed expression types expose javac's constant
+	// values, including the exact UTF-16 text of folded concatenations.
+	command := exec.CommandContext(ctx, launcher, "--add-exports=jdk.compiler/com.sun.tools.javac.code=ALL-UNNAMED", analyzer)
 	command.Stdin = strings.NewReader(strings.Join(arguments, "\x00"))
 	command.Stderr = &stderr
 	output, err := command.Output()

@@ -134,11 +134,7 @@ func RecordString(name string, components []string, values ...any) *String {
             appendEncoded(",\x00 \x00")
         }
         appendEncoded(StringFromGo(component + "=").encoded)
-        value := CanonicalReference(values[index])
-        if stringer, ok := value.(interface{ ToString() *String }); ok {
-            value = stringer.ToString()
-        }
-        appendEncoded(stringConversion(value))
+        appendEncoded(stringConversion(values[index]))
     }
     appendEncoded("]\x00")
     return &String{encoded: result.String()}

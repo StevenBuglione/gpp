@@ -53,6 +53,7 @@ import com.sun.source.util.JavacTask;
 import com.sun.source.util.TreePath;
 import com.sun.source.util.TreePathScanner;
 import com.sun.source.util.Trees;
+import com.sun.tools.javac.code.Type;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
@@ -551,8 +552,12 @@ class JavaSourceAnalysis {
                     ",\"whenTrue\":" + executableExpression(new TreePath(path, conditional.getTrueExpression())) +
                     ",\"whenFalse\":" + executableExpression(new TreePath(path, conditional.getFalseExpression()));
             } else if (tree instanceof BinaryTree binary) {
-                attributes += ",\"left\":" + executableExpression(new TreePath(path, binary.getLeftOperand())) +
-                    ",\"right\":" + executableExpression(new TreePath(path, binary.getRightOperand()));
+                if (tree.getKind() == Tree.Kind.PLUS && type instanceof Type attributed && attributed.constValue() instanceof String text) {
+                    attributes += ",\"utf16LE\":" + quote(utf16LittleEndian(text));
+                } else {
+                    attributes += ",\"left\":" + executableExpression(new TreePath(path, binary.getLeftOperand())) +
+                        ",\"right\":" + executableExpression(new TreePath(path, binary.getRightOperand()));
+                }
             } else if (tree instanceof LiteralTree literal) {
                 if (literal.getValue() instanceof String text) {
                     attributes += ",\"utf16LE\":" + quote(utf16LittleEndian(text));

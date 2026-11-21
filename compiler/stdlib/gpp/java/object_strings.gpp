@@ -1,0 +1,106 @@
+package gpp.java
+
+import (
+    "reflect"
+    "strconv"
+    "sync/atomic"
+)
+
+// ObjectIdentity supplies a stable default Java hash on first use.
+type ObjectIdentity struct {
+    value atomic.Uint32
+}
+
+var nextObjectIdentity atomic.Uint32
+
+func (identity *ObjectIdentity) Hash() uint32 {
+    if value := identity.value.Load(); value != 0 {
+        return value
+    }
+    value := nextObjectIdentity.Add(1)
+    if value == 0 {
+        value = nextObjectIdentity.Add(1)
+    }
+    identity.value.CompareAndSwap(0, value)
+    return identity.value.Load()
+}
+
+type Object struct {
+    identity ObjectIdentity
+}
+
+func NewObject() *Object { return &Object{} }
+func (*Object) GppJavaClassName() string { return "java.lang.Object" }
+func (object *Object) GppJavaIdentityHash() uint32 { return object.identity.Hash() }
+
+func ObjectIdentityHash(value any) int32 {
+    return objectIdentityHash(RequireNonNull(CanonicalReference(value)))
+}
+
+func objectIdentityHash(reference any) int32 {
+    if object, ok := reference.(interface{ GppJavaIdentityHash() uint32 }); ok {
+        return int32(object.GppJavaIdentityHash())
+    }
+    pointer := reflect.ValueOf(reference)
+    if pointer.Kind() == reflect.Pointer {
+        address := uint64(pointer.Pointer())
+        return int32(address ^ (address >> 32))
+    }
+    return 0
+}
+
+func ObjectHashCode(value any) int32 {
+    return objectHashCode(RequireNonNull(CanonicalReference(value)))
+}
+
+func objectHashCode(reference any) int32 {
+    switch object := reference.(type) {
+    case interface{ GppJavaHashCode() int32 }:
+        return object.GppJavaHashCode()
+    case *String, *Boolean, *Byte, *Short, *Character, *Integer, *Long, *Float, *Double:
+        return RecordComponentHash(reference)
+    }
+    return objectIdentityHash(reference)
+}
+
+func DefaultObjectString(value any) *String {
+    return defaultObjectString(RequireNonNull(CanonicalReference(value)))
+}
+
+func defaultObjectString(reference any) *String {
+    return StringFromGo(objectClassName(reference) + "@" + strconv.FormatUint(uint64(uint32(objectHashCode(reference))), 16))
+}
+
+func objectClassName(reference any) string {
+    if object, ok := reference.(interface{ GppJavaClassName() string }); ok {
+        return object.GppJavaClassName()
+    }
+    if failure, ok := reference.(Throwable); ok {
+        return failure.JavaClassName()
+    }
+    return reflect.TypeOf(reference).String()
+}
+
+func ObjectToString(value any) *String {
+    reference := RequireNonNull(CanonicalReference(value))
+    switch object := reference.(type) {
+    case *String:
+        return object
+    case interface{ GppJavaString() *String }:
+        return object.GppJavaString()
+    case *Boolean, *Byte, *Short, *Character, *Integer, *Long, *Float, *Double:
+        return &String{encoded: stringConversion(reference)}
+    case Throwable:
+        name := StringFromGo(object.JavaClassName())
+        if message := ThrowableMessage(object); message != nil {
+            return ConcatStringValue(ConcatStringValue(name, StringFromGo(": ")), message)
+        }
+        return name
+    }
+    if _, translated := reference.(interface{ GppJavaClassName() string }); !translated {
+        if object, ok := reference.(interface{ ToString() *String }); ok {
+            return object.ToString()
+        }
+    }
+    return defaultObjectString(reference)
+}

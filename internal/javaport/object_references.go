@@ -8,9 +8,12 @@ import (
 )
 
 func (program *javaObjectProgram) emitObjectIdentity(out *strings.Builder, class *javaObjectClass, name string) {
+	program.runtime = true
+	program.emitObjectStringMethods(out, class, name)
 	if class.parent == nil {
 		fmt.Fprintf(out, "\nfunc (this *%s) GppJavaOwner() any { return this.javaObjectOwner }\n", name)
 		fmt.Fprintf(out, "\nfunc (this *%s) GppJavaBindOwner(owner any) { this.javaObjectOwner = owner }\n", name)
+		fmt.Fprintf(out, "\nfunc (this *%s) GppJavaIdentityHash() uint32 { return this.javaObjectIdentity.Hash() }\n", name)
 	}
 	fmt.Fprintf(out, "\nfunc (this *%s) GppJavaCanonicalObject() any {\n", name)
 	out.WriteString("\tif this == nil { return nil }\n")

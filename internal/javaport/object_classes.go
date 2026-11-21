@@ -369,7 +369,8 @@ func (program *javaObjectProgram) layoutClass(class *javaObjectClass) error {
 	if declaration.Kind == "RECORD" && class.virtual["GppJavaRecord"] != nil {
 		return unsupportedSource(class.file, declaration, "Go record marker collides with method GppJavaRecord")
 	}
-	for _, method := range []string{"GppJavaBindOwner", "GppJavaOwner", "GppJavaCanonicalObject", "GppJavaReferenceView", javaImplementsBridge} {
+	for _, method := range []string{"GppJavaBindOwner", "GppJavaOwner", "GppJavaCanonicalObject", "GppJavaReferenceView",
+		"GppJavaClassName", "GppJavaIdentityHash", "GppJavaString", "GppJavaHashCode", javaImplementsBridge} {
 		if class.virtual[method] != nil {
 			return unsupportedSource(class.file, declaration, "Go reference bridge collides with method "+method)
 		}

@@ -65,6 +65,79 @@ func javaStringLiteral(encoded *string) (string, error) {
 	return "javart.InternStringLiteral(" + strconv.Quote(string(data)) + ")", nil
 }
 
+func (ctx javaObjectContext) concatString(expression *JavaExpression) (string, error) {
+	if expression.UTF16LE != nil {
+		return ctx.program.stringLiteral(expression.UTF16LE)
+	}
+	if expression.Left == nil || expression.Right == nil {
+		return "", fmt.Errorf("missing attributed Java concatenation operand")
+	}
+	left, err := ctx.stringOperand(expression.Left)
+	if err != nil {
+		return "", err
+	}
+	right, err := ctx.stringOperand(expression.Right)
+	if err != nil {
+		return "", err
+	}
+	ctx.program.runtime = true
+	// A left operand's Java toString can change the state read by the
+	// right operand or throw before the right operand is evaluated.
+	return fmt.Sprintf("func() *javart.String { javaConcatLeft := javart.StringForConcat(%s); return javart.ConcatStringValue(javaConcatLeft, %s) }()",
+		left, right), nil
+}
+
+func (ctx javaObjectContext) stringOperand(expression *JavaExpression) (string, error) {
+	if nullConditional(expression) != nil {
+		return ctx.converted(expression, javaObjectType)
+	}
+	return ctx.expression(expression)
+}
+
+func (program *javaObjectProgram) emitObjectStringMethods(out *strings.Builder, class *javaObjectClass, name string) {
+	fmt.Fprintf(out, "\nfunc (*%s) GppJavaClassName() string { return %q }\n", name, class.declaration.Symbol)
+	for _, bridge := range []struct{ name, method, javaType string }{
+		{"GppJavaString", "toString", javaStringType},
+		{"GppJavaHashCode", "hashCode", "int"},
+	} {
+		goName := exportMethodName(bridge.method)
+		method := class.virtual[goName]
+		if method == nil || method.declaration.Name != bridge.method ||
+			method.declaration.Result != bridge.javaType || len(method.declaration.Parameters) != 0 {
+			continue
+		}
+		receiver, _ := class.memberReceiver(method.slot.class)
+		fmt.Fprintf(out, "\nfunc (this *%s) %s() %s { return %s.%s() }\n",
+			name, bridge.name, program.objectGoType(bridge.javaType), receiver, goName)
+	}
+}
+
+func (ctx javaObjectContext) invokeObjectStringMethod(expression *JavaExpression) (string, error) {
+	method := "ObjectToString"
+	if expression.Symbol == "java.lang.Object#hashCode()" {
+		method = "ObjectHashCode"
+	}
+	target := "this"
+	if expression.Target != nil {
+		value, err := ctx.expression(expression.Target)
+		if err != nil {
+			return "", err
+		}
+		target = value
+	} else if (ctx.class == nil && ctx.iface == nil) || ctx.static {
+		return "", fmt.Errorf("missing Java Object method receiver for %s", expression.Symbol)
+	}
+	if expression.Receiver == "super" {
+		if method == "ObjectHashCode" {
+			method = "ObjectIdentityHash"
+		} else {
+			method = "DefaultObjectString"
+		}
+	}
+	ctx.program.runtime = true
+	return "javart." + method + "(" + target + ")", nil
+}
+
 func (ctx javaObjectContext) newString(expression *JavaExpression) (string, error) {
 	switch expression.Symbol {
 	case "java.lang.String#<init>()":

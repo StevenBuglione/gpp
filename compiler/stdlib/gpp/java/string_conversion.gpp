@@ -15,6 +15,14 @@ func ConcatStringValue(left *String, right any) *String {
     return &String{encoded: prefix + suffix}
 }
 
+// StringForConcat converts an operand before evaluating any later operand.
+func StringForConcat(value any) *String {
+    if stringValue, ok := value.(*String); ok && stringValue != nil {
+        return stringValue
+    }
+    return &String{encoded: stringConversion(value)}
+}
+
 func stringConversion(value any) string {
     if isNullReference(value) {
         return "\x6e\x00\x75\x00\x6c\x00\x6c\x00"
@@ -47,5 +55,8 @@ func stringConversion(value any) string {
     case *Double:
         return stringConversion(converted.value)
     }
-    panic("unsupported operand for Java string conversion")
+    if text := ObjectToString(value); text != nil {
+        return text.encoded
+    }
+    return "\x6e\x00\x75\x00\x6c\x00\x6c\x00"
 }

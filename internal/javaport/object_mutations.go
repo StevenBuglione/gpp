@@ -122,10 +122,7 @@ func javaMutationOperand(expression *JavaExpression) *JavaExpression {
 
 func (ctx javaObjectContext) updatedValue(target string, operand *JavaExpression, operator string) (string, error) {
 	if target == javaStringType && operator == "PLUS" {
-		if kind := primitiveOperandType(operand.Type); primitiveTypes[kind] == "" && kind != javaStringType && kind != "null" {
-			return "", fmt.Errorf("unsupported Java string conversion from %s", operand.Type)
-		}
-		value, err := ctx.expression(operand)
+		value, err := ctx.stringOperand(operand)
 		if err != nil {
 			return "", err
 		}
