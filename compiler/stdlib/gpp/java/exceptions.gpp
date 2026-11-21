@@ -30,6 +30,12 @@ type Throwable interface {
     JavaClassName() string
 }
 
+// Exception identifies checked and unchecked subclasses of java.lang.Exception.
+type Exception interface {
+    Throwable
+    JavaException()
+}
+
 // RuntimeException identifies exceptions that Java treats as unchecked.
 type RuntimeException interface {
     Throwable
@@ -39,6 +45,13 @@ type RuntimeException interface {
 // IllegalArgumentException preserves the Java validation error type at Go call sites.
 type IllegalArgumentException struct {
     Message string
+}
+
+// NewIllegalArgumentException translates the Java constructor's String message
+// to the existing Go error representation.
+func NewIllegalArgumentException(message *String) *IllegalArgumentException {
+    text, _ := message.ToGo()
+    return &IllegalArgumentException{Message: text}
 }
 
 func (exception *IllegalArgumentException) Error() string {
@@ -51,6 +64,8 @@ func (exception *IllegalArgumentException) JavaClassName() string {
 
 func (exception *IllegalArgumentException) JavaRuntimeException() {}
 
+func (*IllegalArgumentException) JavaException() {}
+
 type NullPointerException struct {
     _ byte
 }
@@ -60,6 +75,8 @@ func (*NullPointerException) Error() string { return "java.lang.NullPointerExcep
 func (*NullPointerException) JavaClassName() string { return "java.lang.NullPointerException" }
 
 func (*NullPointerException) JavaRuntimeException() {}
+
+func (*NullPointerException) JavaException() {}
 
 type StringIndexOutOfBoundsException struct {
     Index int32
@@ -73,3 +90,25 @@ func (exception *StringIndexOutOfBoundsException) Error() string {
 func (*StringIndexOutOfBoundsException) JavaClassName() string { return "java.lang.StringIndexOutOfBoundsException" }
 
 func (*StringIndexOutOfBoundsException) JavaRuntimeException() {}
+
+func (*StringIndexOutOfBoundsException) JavaException() {}
+
+// IOException models the checked java.io.IOException class.
+type IOException struct {
+    message *String
+}
+
+func NewIOException(message *String) *IOException {
+    return &IOException{message: message}
+}
+
+func (exception *IOException) Error() string {
+    text, _ := exception.message.ToGo()
+    return text
+}
+
+func (exception *IOException) GetMessage() *String { return exception.message }
+
+func (*IOException) JavaClassName() string { return "java.io.IOException" }
+
+func (*IOException) JavaException() {}

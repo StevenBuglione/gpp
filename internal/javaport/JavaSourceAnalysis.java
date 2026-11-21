@@ -1,12 +1,14 @@
 import com.sun.source.tree.AssignmentTree;
 import com.sun.source.tree.BinaryTree;
 import com.sun.source.tree.BlockTree;
+import com.sun.source.tree.CatchTree;
 import com.sun.source.tree.ClassTree;
 import com.sun.source.tree.CompilationUnitTree;
 import com.sun.source.tree.ExportsTree;
 import com.sun.source.tree.ExpressionStatementTree;
 import com.sun.source.tree.ExpressionTree;
 import com.sun.source.tree.IdentifierTree;
+import com.sun.source.tree.IfTree;
 import com.sun.source.tree.ImportTree;
 import com.sun.source.tree.LiteralTree;
 import com.sun.source.tree.MemberReferenceTree;
@@ -21,8 +23,11 @@ import com.sun.source.tree.ProvidesTree;
 import com.sun.source.tree.RequiresTree;
 import com.sun.source.tree.ReturnTree;
 import com.sun.source.tree.StatementTree;
+import com.sun.source.tree.ThrowTree;
 import com.sun.source.tree.Tree;
+import com.sun.source.tree.TryTree;
 import com.sun.source.tree.TypeCastTree;
+import com.sun.source.tree.UnionTypeTree;
 import com.sun.source.tree.UsesTree;
 import com.sun.source.tree.VariableTree;
 import com.sun.source.util.JavacTask;
@@ -267,13 +272,47 @@ class JavaSourceAnalysis {
             ExpressionTree expression = null;
             if (statement instanceof ReturnTree returned) {
                 expression = returned.getExpression();
+            } else if (statement instanceof ThrowTree thrown) {
+                expression = thrown.getExpression();
             } else if (statement instanceof ExpressionStatementTree expressionStatement) {
                 expression = expressionStatement.getExpression();
+            } else if (statement instanceof TryTree attempted) {
+                var block = attempted.getBlock();
+                record += ",\"body\":" + bodyRecord(new TreePath(path, block), block.getStatements()) +
+                    ",\"resources\":" + attempted.getResources().size() + ",\"catches\":[" +
+                    attempted.getCatches().stream().map(handler -> catchRecord(new TreePath(path, handler), handler))
+                    .collect(Collectors.joining(",")) + "]";
+                var cleanup = attempted.getFinallyBlock();
+                if (cleanup != null) {
+                    record += ",\"finally\":" + bodyRecord(new TreePath(path, cleanup), cleanup.getStatements());
+                }
+            } else if (statement instanceof BlockTree block) {
+                record += ",\"body\":" + bodyRecord(path, block.getStatements());
+            } else if (statement instanceof IfTree conditional) {
+                expression = conditional.getCondition();
+                record += ",\"then\":" + statementRecord(new TreePath(path, conditional.getThenStatement()));
+                if (conditional.getElseStatement() != null) {
+                    record += ",\"else\":" + statementRecord(new TreePath(path, conditional.getElseStatement()));
+                }
             }
             if (expression != null) {
                 record += ",\"expression\":" + executableExpression(new TreePath(path, expression));
             }
             return record + "}";
+        }
+
+        private String catchRecord(TreePath path, CatchTree handler) {
+            var parameter = handler.getParameter();
+            var typePath = new TreePath(new TreePath(path, parameter), parameter.getType());
+            List<? extends Tree> alternatives = parameter.getType() instanceof UnionTypeTree union ?
+                union.getTypeAlternatives() : List.of(parameter.getType());
+            var names = alternatives.stream().map(alternative -> {
+                var memberPath = alternative == parameter.getType() ? typePath : new TreePath(typePath, alternative);
+                return quote(expressionType(trees.getTypeMirror(memberPath)));
+            }).collect(Collectors.joining(","));
+            var body = handler.getBlock();
+            return "{\"name\":" + quote(parameter.getName().toString()) + ",\"types\":[" + names +
+                "],\"body\":" + bodyRecord(new TreePath(path, body), body.getStatements()) + "}";
         }
 
         private String positionRecord(Tree tree) {
@@ -295,6 +334,9 @@ class JavaSourceAnalysis {
                 var element = trees.getElement(path);
                 if (element != null && element.getKind() == ElementKind.PARAMETER) {
                     attributes += ",\"name\":" + quote(identifier.getName().toString());
+                } else if (element != null && element.getKind() == ElementKind.EXCEPTION_PARAMETER) {
+                    kind = "CATCH_PARAMETER";
+                    attributes += ",\"name\":" + quote(identifier.getName().toString());
                 } else if (element instanceof VariableElement field && element.getKind().isField()) {
                     kind = "FIELD";
                     attributes += fieldExpression(field, "this");
@@ -314,7 +356,8 @@ class JavaSourceAnalysis {
                 String symbol = symbol(trees.getElement(path));
                 attributes += ",\"symbol\":" + quote(symbol) + ",\"receiver\":" + quote(receiver) +
                     callArguments(path, call.getArguments());
-                if (symbol.startsWith("java.lang.String#") && callee instanceof MemberSelectTree selector &&
+                if ((symbol.startsWith("java.lang.String#") || symbol.equals("java.lang.Throwable#getMessage()")) &&
+                        callee instanceof MemberSelectTree selector &&
                         receiver.equals("other")) {
                     var target = TreePath.getPath(path, selector.getExpression());
                     attributes += ",\"target\":" + executableExpression(target);
@@ -356,9 +399,8 @@ class JavaSourceAnalysis {
             if (type == null) {
                 return "";
             }
-            if (type instanceof DeclaredType declared && declared.asElement() instanceof TypeElement element &&
-                    element.getQualifiedName().contentEquals("java.lang.String")) {
-                return "java.lang.String";
+            if (type instanceof DeclaredType declared && declared.asElement() instanceof TypeElement element) {
+                return elements.getBinaryName(element).toString();
             }
             return type.getKind().name().toLowerCase(Locale.ROOT);
         }

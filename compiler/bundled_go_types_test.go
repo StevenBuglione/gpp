@@ -7,6 +7,9 @@ import (
 )
 
 func TestBundledGoExceptionTypes(t *testing.T) {
+	if _, err := (bundledGoTypeImporter{}).Import("gpp/java"); err != nil {
+		t.Fatalf("resolve bundled Java catch types: %v", err)
+	}
 	source, err := ParseFile("main.gpp", `package main
 
 import (

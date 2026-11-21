@@ -158,9 +158,9 @@ func (program *javaObjectProgram) addMember(class *javaObjectClass, declaration 
 }
 
 func (program *javaObjectProgram) addMethod(class *javaObjectClass, declaration Occurrence) error {
-	if declaration.HasTypeParams || len(declaration.Thrown) > 0 || declaration.Body == nil ||
+	if declaration.HasTypeParams || declaration.Body == nil ||
 		!hasOnlyModifiers(declaration, "PUBLIC", "PRIVATE", "PROTECTED", "FINAL") {
-		return fmt.Errorf("unsupported constructor or method modifiers, body, type parameters, or throws")
+		return fmt.Errorf("unsupported constructor or method modifiers, body, or type parameters")
 	}
 	for _, parameter := range declaration.Parameters {
 		if objectGoType(parameter.Type) == "" {
@@ -178,6 +178,13 @@ func (program *javaObjectProgram) addMethod(class *javaObjectClass, declaration 
 				return fmt.Errorf("duplicate exported Go constructor %s", method.goName)
 			}
 			program.exports[method.goName] = true
+			if method.hasErrorAdapter() {
+				name := method.errorAdapterName()
+				if program.exports[name] {
+					return fmt.Errorf("duplicate Go constructor error adapter %s", name)
+				}
+				program.exports[name] = true
+			}
 		}
 		class.constructors = append(class.constructors, method)
 	} else {
@@ -251,6 +258,13 @@ func (program *javaObjectProgram) layoutClass(class *javaObjectClass) error {
 			return unsupportedSource(class.file, declaration, "Go ancestor view collides with method "+method.goName)
 		}
 	}
+	for owner := class; owner != nil; owner = owner.parent {
+		for _, method := range owner.methods {
+			if method.hasErrorAdapter() && class.virtual[method.errorAdapterName()] != nil {
+				return unsupportedSource(class.file, declaration, "Go error adapter collides with method "+method.errorAdapterName())
+			}
+		}
+	}
 	delete(program.pending, declaration.Symbol)
 	program.layout = append(program.layout, class)
 	return nil
@@ -295,6 +309,17 @@ func methodSignatureKey(declaration Occurrence) string {
 
 func objectViewName(class *javaObjectClass) string {
 	return "GppAs" + class.declaration.Name
+}
+
+func (method *javaObjectMethod) hasErrorAdapter() bool {
+	return method.public && len(method.declaration.Thrown) != 0
+}
+
+func (method *javaObjectMethod) errorAdapterName() string {
+	if method.declaration.Name == "<init>" {
+		return "Gpp" + method.goName
+	}
+	return "GppCall" + method.goName
 }
 
 func (class *javaObjectClass) memberReceiver(owner *javaObjectClass) (string, bool) {

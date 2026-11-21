@@ -143,6 +143,13 @@ initialization and virtual calls during construction. It emits Go constructors
 such as `NewChild()` and `NewChildWithInt(int32)`. Go callers can use exported
 methods directly or request an ancestor view such as `child.GppAsBase()`.
 
+Translated methods and constructors can use Java `throw`, typed `catch`,
+multi-catch, and `finally` with the exception classes provided by `gpp/java`.
+The importer uses javac to check declared exceptions. For a public Java
+`read(...) throws IOException` method, the generated `GppCallRead(...)`
+adapter exposes the result and original exception as a Go `error`. A public
+constructor with `throws` has a corresponding `GppNew…` adapter.
+
 Java `String` becomes a `*java.String` from the generated module's `gpp/java`
 package. A nil pointer represents Java null. Use `StringFromGo` to decode Go
 UTF-8 and `ToGo` to decode a Java name and check for null. Use `StringFromUTF16`

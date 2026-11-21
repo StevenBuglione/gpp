@@ -147,8 +147,20 @@ type MethodBody struct {
 type JavaStatement struct {
 	Kind       string          `json:"kind"`
 	Expression *JavaExpression `json:"expression,omitempty"`
+	Body       *MethodBody     `json:"body,omitempty"`
+	Catches    []JavaCatch     `json:"catches,omitempty"`
+	Finally    *MethodBody     `json:"finally,omitempty"`
+	Resources  int             `json:"resources,omitempty"`
+	Then       *JavaStatement  `json:"then,omitempty"`
+	Else       *JavaStatement  `json:"else,omitempty"`
 	Line       int64           `json:"line"`
 	Column     int64           `json:"column"`
+}
+
+type JavaCatch struct {
+	Name  string      `json:"name"`
+	Types []string    `json:"types"`
+	Body  *MethodBody `json:"body"`
 }
 
 type JavaExpression struct {

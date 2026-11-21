@@ -72,9 +72,11 @@ func parseBundledGoDeclarations(source *File, fileSet *token.FileSet) (*ast.File
 			}
 		}
 		for _, node := range nodes {
-			if function, ok := node.(*ast.FuncDecl); ok {
+			if function, ok := node.(*ast.FuncDecl); ok && function.Body != nil {
 				signature := *function
-				signature.Body = nil
+				// Generic Go functions must have a body even when the type
+				// checker is configured to ignore its statements.
+				signature.Body = &ast.BlockStmt{}
 				node = &signature
 			}
 			if err := format.Node(&code, positions, node); err != nil {

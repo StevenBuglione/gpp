@@ -1,0 +1,97 @@
+package gpp.java
+
+import "reflect"
+
+// Throw implements Java's throw statement, including throw null.
+func Throw(failure Throwable) {
+    if failure == nil {
+        Raise(&NullPointerException{})
+    }
+    pointer := reflect.ValueOf(failure)
+    if pointer.Kind() == reflect.Pointer && pointer.IsNil() {
+        Raise(&NullPointerException{})
+    }
+    Raise(failure)
+}
+
+// Try runs a translated Java try statement. A handler returns true after it
+// completes normally for a matching exception. Cleanup runs on every exit.
+func Try(body func(), handle func(error) bool, cleanup func()) {
+    if cleanup != nil {
+        defer runFinally(cleanup)
+    }
+    if handle != nil {
+        defer func() {
+            if recovered := recover(); recovered != nil {
+                failure, raised := UnwrapRaised(recovered)
+                if !raised || !handle(failure) {
+                    panic(recovered)
+                }
+            }
+        }()
+    }
+    body()
+}
+
+func runFinally(cleanup func()) {
+    pending := recover()
+    if pending != nil && !isJavaCompletion(pending) {
+        // Java return and throw signals must never hide a native Go panic.
+        defer func() {
+            if next := recover(); next != nil && !isJavaCompletion(next) {
+                panic(next)
+            }
+            panic(pending)
+        }()
+        cleanup()
+        return
+    }
+    cleanup()
+    if pending != nil {
+        panic(pending)
+    }
+}
+
+func isJavaCompletion(value any) bool {
+    switch value.(type) {
+    case raisedException, interface{ javaReturnSignal() }:
+        return true
+    default:
+        return false
+    }
+}
+
+type returnValue[T any] struct {
+    value T
+}
+
+func (returnValue[T]) javaReturnSignal() {}
+
+// Return carries a Java return out of a translated try, catch, or finally block.
+func Return[T any](value T) {
+    panic(returnValue[T]{value: value})
+}
+
+// RecoverReturn completes a typed Java return and propagates other failures.
+// The generated Java method defers this function directly.
+func RecoverReturn[T any](destination *T) {
+    if recovered := recover(); recovered != nil {
+        returned, ok := recovered.(returnValue[T])
+        if !ok {
+            panic(recovered)
+        }
+        *destination = returned.value
+    }
+}
+
+// RecoverError adapts a Java-facing call to a Go API with a trailing error.
+// The adapter defers this function directly.
+func RecoverError(failure *error) {
+    if recovered := recover(); recovered != nil {
+        raised, ok := UnwrapRaised(recovered)
+        if !ok {
+            panic(recovered)
+        }
+        *failure = raised
+    }
+}

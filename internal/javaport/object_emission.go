@@ -99,6 +99,8 @@ type javaObjectContext struct {
 	program   *javaObjectProgram
 	class     *javaObjectClass
 	arguments map[string]string
+	caught    map[string]string
+	inTry     bool
 }
 
 func (ctx javaObjectContext) emitConstructor(out *strings.Builder, method *javaObjectMethod) error {
@@ -120,12 +122,18 @@ func (ctx javaObjectContext) emitConstructor(out *strings.Builder, method *javaO
 			fmt.Fprintf(out, "\t%s.javaDispatch%s = %s.%s\n", receiver, slot.goName, owner, implementation.internal)
 		}
 		fmt.Fprintf(out, "\tthis.%s(%s)\n\treturn this\n}\n", method.internal, arguments)
+		if method.hasErrorAdapter() {
+			ctx.emitErrorAdapter(out, "", method.errorAdapterName(), parameters, "*"+name, method.goName+"("+arguments+")")
+		}
 	}
 	call := declaration.ConstructorCall
 	if call == nil || (call.Receiver != "this" && call.Receiver != "super") {
 		return fmt.Errorf("requires a resolved this(...) or super(...) invocation before the constructor body")
 	}
 	fmt.Fprintf(out, "\nfunc (this *%s) %s(%s) {\n", name, method.internal, parameters)
+	if declaration.Body.containsTry() {
+		ctx.emitJavaReturnBoundary(out, "void")
+	}
 	if call.Receiver != "super" || call.Symbol != "java.lang.Object#<init>()" || ctx.class.parent != nil {
 		callee := ctx.program.methods[call.Symbol]
 		expected := ctx.class
@@ -162,9 +170,20 @@ func (ctx javaObjectContext) emitMethod(out *strings.Builder, method *javaObject
 	if method.public && method.slot == method && !method.overridden {
 		bodyName = method.goName
 	}
-	fmt.Fprintf(out, "\nfunc (this *%s) %s(%s)%s {\n", name, bodyName, parameters, result)
+	bodyResult := result
+	hasTry := declaration.Body.containsTry()
+	if hasTry && declaration.Result != "void" {
+		bodyResult = " (javaResult " + objectGoType(declaration.Result) + ")"
+	}
+	fmt.Fprintf(out, "\nfunc (this *%s) %s(%s)%s {\n", name, bodyName, parameters, bodyResult)
+	if hasTry {
+		ctx.emitJavaReturnBoundary(out, declaration.Result)
+	}
 	if err := ctx.emitStatements(out, declaration.Body, declaration.Result); err != nil {
 		return err
+	}
+	if hasTry && declaration.Result != "void" {
+		out.WriteString("\tpanic(\"Java method completed without a result\")\n")
 	}
 	out.WriteString("}\n")
 	if method.overridden {
@@ -176,7 +195,22 @@ func (ctx javaObjectContext) emitMethod(out *strings.Builder, method *javaObject
 			fmt.Fprintf(out, "\t\treturn dispatch(%s)\n\t}\n\treturn this.%s(%s)\n}\n", arguments, bodyName, arguments)
 		}
 	}
+	if method.hasErrorAdapter() {
+		ctx.emitErrorAdapter(out, "(this *"+name+") ", method.errorAdapterName(), parameters,
+			strings.TrimSpace(result), "this."+method.goName+"("+arguments+")")
+	}
 	return nil
+}
+
+func (ctx javaObjectContext) emitErrorAdapter(out *strings.Builder, receiver, name, parameters, result, call string) {
+	ctx.program.runtime = true
+	if result == "" {
+		fmt.Fprintf(out, "\nfunc %s%s(%s) (failure error) {\n\tdefer javart.RecoverError(&failure)\n\t%s\n\treturn nil\n}\n",
+			receiver, name, parameters, call)
+		return
+	}
+	fmt.Fprintf(out, "\nfunc %s%s(%s) (value %s, failure error) {\n\tdefer javart.RecoverError(&failure)\n\treturn %s, nil\n}\n",
+		receiver, name, parameters, result, call)
 }
 
 func (ctx javaObjectContext) emitStatements(out *strings.Builder, body *MethodBody, result string) error {
@@ -198,12 +232,30 @@ func (ctx javaObjectContext) statement(statement JavaStatement, result string) (
 	switch statement.Kind {
 	case "RETURN":
 		if result == "void" && expression == nil {
+			if ctx.inTry {
+				return "javart.Return(struct{}{})", nil
+			}
 			return "return", nil
 		}
 		if expression != nil {
 			value, err := ctx.converted(expression, result)
+			if ctx.inTry && err == nil {
+				return "javart.Return[" + objectGoType(result) + "](" + value + ")", nil
+			}
 			return "return " + value, err
 		}
+	case "THROW":
+		return ctx.throwStatement(expression)
+	case "TRY":
+		return ctx.tryStatement(statement, result)
+	case "BLOCK":
+		var body strings.Builder
+		if err := ctx.emitStatements(&body, statement.Body, result); err != nil {
+			return "", err
+		}
+		return "{\n" + body.String() + "}", nil
+	case "IF":
+		return ctx.ifStatement(statement, result)
 	case "EXPRESSION_STATEMENT":
 		if expression == nil {
 			break
@@ -245,11 +297,19 @@ func (ctx javaObjectContext) converted(expression *JavaExpression, target string
 
 func (ctx javaObjectContext) expression(expression *JavaExpression) (string, error) {
 	switch expression.Kind {
+	case "CATCH_PARAMETER":
+		if name, found := ctx.caught[expression.Name]; found {
+			return name, nil
+		}
+		return "", fmt.Errorf("cannot use caught parameter %s", strings.TrimSpace(expression.Name))
 	case "FIELD":
 		return ctx.field(expression)
 	case "METHOD_INVOCATION":
 		return ctx.invoke(expression)
 	case "NEW_CLASS":
+		if _, throwable := javaCatchTypes[expression.Type]; throwable {
+			return ctx.newThrowable(expression)
+		}
 		return ctx.newString(expression)
 	case "STRING_LITERAL":
 		return ctx.program.stringLiteral(expression.UTF16LE)
@@ -307,6 +367,10 @@ func (ctx javaObjectContext) field(expression *JavaExpression) (string, error) {
 func (ctx javaObjectContext) invoke(expression *JavaExpression) (string, error) {
 	if expression.Target != nil && expression.Target.Type == javaStringType {
 		return ctx.invokeString(expression)
+	}
+	if expression.Symbol == "java.lang.Throwable#getMessage()" && expression.Target != nil && expression.Target.Type == javaIOException {
+		value, err := ctx.expression(expression.Target)
+		return "(" + value + ").GetMessage()", err
 	}
 	callee := ctx.program.methods[expression.Symbol]
 	if callee == nil || callee.declaration.Name == "<init>" ||
