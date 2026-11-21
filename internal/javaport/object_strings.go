@@ -10,8 +10,9 @@ import (
 const javaStringType = "java.lang.String"
 
 func (program *javaObjectProgram) objectGoType(javaType string) string {
+	javaType = program.memberTypeName(javaType)
 	if class := program.classes[javaType]; class != nil {
-		return "*" + program.classReference(class, class.declaration.Name)
+		return "*" + program.classReference(class, class.goTypeName())
 	}
 	if iface := program.interfaces[javaType]; iface != nil {
 		return program.interfaceReference(iface, iface.declaration.Name)
@@ -22,6 +23,7 @@ func (program *javaObjectProgram) objectGoType(javaType string) string {
 }
 
 func (program *javaObjectProgram) mappedObjectType(javaType string) string {
+	javaType = program.memberTypeName(javaType)
 	if program.supportedIntersection(javaType) {
 		return "any"
 	}
@@ -35,7 +37,7 @@ func (program *javaObjectProgram) mappedObjectType(javaType string) string {
 		return "javart.Record"
 	}
 	if class := program.classes[javaType]; class != nil {
-		return "*" + class.declaration.Name
+		return "*" + class.goTypeName()
 	}
 	if iface := program.interfaces[javaType]; iface != nil {
 		return iface.declaration.Name

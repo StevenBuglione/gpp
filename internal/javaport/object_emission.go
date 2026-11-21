@@ -9,15 +9,15 @@ import (
 )
 
 func (program *javaObjectProgram) emitClass(out *strings.Builder, class *javaObjectClass) error {
-	name := class.storageName(class.declaration.Name)
-	emitJavaPermits(out, class.declaration, class.storageName(javaPermitsAPI(class.declaration.Name)))
+	name := class.storageName(class.goTypeName())
+	emitJavaPermits(out, class.declaration, class.storageName(javaPermitsAPI(class.goTypeName())))
 	if class.hasAssertions {
 		program.runtime = true
 		fmt.Fprintf(out, "\nvar %s javart.AssertionStatus\n", class.assertionStatus().storage)
 	}
 	if class.parent != nil && class.parent.file.Package != class.file.Package {
 		fmt.Fprintf(out, "\ntype %s = %s\n", class.baseField(),
-			program.classReference(class.parent, class.parent.declaration.Name))
+			program.classReference(class.parent, class.parent.goTypeName()))
 	}
 	for _, field := range class.fields {
 		if !javaPublicConstant(field) {
@@ -38,6 +38,9 @@ func (program *javaObjectProgram) emitClass(out *strings.Builder, class *javaObj
 		fmt.Fprintf(out, "\nconst %s = %s\n", class.constantStorageName(field), literal)
 	}
 	fmt.Fprintf(out, "\ntype %s struct {\n", name)
+	if class.enclosing != nil {
+		fmt.Fprintf(out, "\tjavaEnclosing %s\n", program.objectGoType(class.enclosing.declaration.Symbol))
+	}
 	if class.parent != nil {
 		fmt.Fprintf(out, "\t%s\n", class.baseField())
 	} else {
@@ -126,7 +129,7 @@ func emitJavaCheckedResult(out *strings.Builder, name string) {
 }
 
 func (class *javaObjectClass) checkedResultName() string {
-	return "javaCheckedResult" + class.storageName(class.declaration.Name)
+	return "javaCheckedResult" + class.storageName(class.goTypeName())
 }
 
 type javaObjectContext struct {
@@ -146,15 +149,19 @@ type javaObjectContext struct {
 }
 
 func (ctx javaObjectContext) emitConstructor(out *strings.Builder, method *javaObjectMethod) error {
-	name := ctx.class.storageName(ctx.class.declaration.Name)
+	name := ctx.class.storageName(ctx.class.goTypeName())
 	declaration := method.declaration
-	parameters, arguments := ctx.program.objectParameterList(declaration.Parameters)
+	parameters, arguments := ctx.program.memberConstructorParameters(method)
 	ctx.arguments = objectParameterNames(declaration.Parameters)
 	if !ctx.class.isAbstract() {
 		allocator := ctx.class.storageName(method.allocatorName())
 		fmt.Fprintf(out, "\nfunc %s(%s) *%s {\n", allocator, parameters, name)
 		if guard := ctx.program.classInitialization(ctx.class); guard != "" {
 			fmt.Fprintf(out, "\t%s\n", guard)
+		}
+		if ctx.class.enclosing != nil {
+			ctx.program.runtime = true
+			out.WriteString("\tjavart.RequireNonNull(javaOuter)\n")
 		}
 		fmt.Fprintf(out, "\tthis := new(%s)\n", name)
 		if ctx.class.parent != nil {
@@ -193,6 +200,9 @@ func (ctx javaObjectContext) emitConstructor(out *strings.Builder, method *javaO
 		return fmt.Errorf("requires a resolved this(...) or super(...) invocation before the constructor body")
 	}
 	fmt.Fprintf(out, "\nfunc (this *%s) %s(%s) {\n", name, method.internal, parameters)
+	if ctx.class.enclosing != nil {
+		out.WriteString("\tthis.javaEnclosing = javaOuter\n")
+	}
 	if declaration.Body.containsTry() {
 		ctx.emitJavaReturnBoundary(out, "void")
 	}
@@ -209,16 +219,33 @@ func (ctx javaObjectContext) emitConstructor(out *strings.Builder, method *javaO
 		if callee == nil || callee.class != expected || callee.declaration.Name != "<init>" {
 			return fmt.Errorf("unsupported Java constructor target %s", call.Symbol)
 		}
-		values, err := ctx.callArguments(call, callee)
-		if err != nil {
-			return err
-		}
 		receiver, _ := ctx.class.memberReceiver(callee.class)
 		calleeName := callee.internal
 		if callee.class.file.Package != ctx.class.file.Package {
 			calleeName = callee.bridgeName("Init")
 		}
-		fmt.Fprintf(&body, "\t%s.%s(%s)\n", receiver, calleeName, values)
+		if callee.class.enclosing != nil {
+			outer := "this.javaEnclosing"
+			if call.Receiver == "super" {
+				var err error
+				outer, err = ctx.enclosingArgument(callee.class.enclosing, call.Target, true)
+				if err != nil {
+					return err
+				}
+			}
+			invocation, err := ctx.orderedStaticInvocation(call, callee, "", "\tjavaSuperclassOuter := "+outer+"\n",
+				receiver+"."+calleeName, "javaSuperclassOuter")
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(&body, "\t%s\n", invocation)
+		} else {
+			values, err := ctx.callArguments(call, callee)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(&body, "\t%s.%s(%s)\n", receiver, calleeName, values)
+		}
 	}
 	if call.Receiver == "super" && len(ctx.class.initializers) > 0 {
 		body.WriteString("\tthis.javaInitFields()\n")
@@ -240,7 +267,7 @@ func (ctx javaObjectContext) emitMethod(out *strings.Builder, method *javaObject
 	if method.recordImplicit {
 		return ctx.emitRecordMethod(out, method)
 	}
-	name := ctx.class.storageName(ctx.class.declaration.Name)
+	name := ctx.class.storageName(ctx.class.goTypeName())
 	declaration := method.declaration
 	parameters, arguments := ctx.program.objectParameterList(declaration.Parameters)
 	result := ctx.program.objectResultType(method)
@@ -390,6 +417,9 @@ func (ctx javaObjectContext) statement(statement JavaStatement, result string) (
 			return ctx.expression(expression)
 		}
 		switch expression.Kind {
+		case "NEW_CLASS":
+			value, err := ctx.expression(expression)
+			return "_ = " + value, err
 		case "ASSIGNMENT":
 			return ctx.assignment(expression, false)
 		case "PREFIX_INCREMENT", "PREFIX_DECREMENT", "POSTFIX_INCREMENT", "POSTFIX_DECREMENT":
@@ -445,6 +475,8 @@ func (ctx javaObjectContext) rawExpression(expression *JavaExpression) (string, 
 	switch expression.Kind {
 	case "THIS":
 		return "this", nil
+	case "QUALIFIED_THIS":
+		return ctx.qualifiedThis(expression.Type)
 	case "IDENTIFIER":
 		if name, found := ctx.arguments[expression.Name]; found {
 			return ctx.lambdaCaptures.resolve(name), nil
@@ -613,6 +645,16 @@ func (ctx javaObjectContext) invoke(expression *JavaExpression) (string, error) 
 	if callee != nil && expression.Target != nil && ctx.program.classes[expression.Target.Type] != nil && callee.public {
 		return ctx.invokeReference(expression, callee)
 	}
+	if callee != nil && expression.Target != nil && !callee.public && ctx.class != nil &&
+		ctx.class.outermostName() == callee.class.outermostName() {
+		target, err := ctx.converted(expression.Target, callee.class.declaration.Symbol)
+		if err != nil {
+			return "", err
+		}
+		return ctx.emitReferenceInvocation(expression, callee.declaration, target, func(receiver, arguments string) string {
+			return receiver + "." + callee.internal + "(" + arguments + ")"
+		})
+	}
 	if callee == nil || ctx.class == nil || callee.declaration.Name == "<init>" ||
 		(expression.Receiver != "this" && expression.Receiver != "super") {
 		return "", fmt.Errorf("unsupported Java method invocation %s", expression.Symbol)
@@ -632,6 +674,13 @@ func (ctx javaObjectContext) invoke(expression *JavaExpression) (string, error) 
 		}
 	}
 	receiver, found := ctx.class.memberReceiver(owner)
+	if expression.Implicit {
+		receiver, found = ctx.lexicalReceiver(callee.class, callee.public, false)
+		if found && owner != callee.class {
+			view, ok := callee.class.memberReceiver(owner)
+			receiver, found = receiver+strings.TrimPrefix(view, "this"), ok
+		}
+	}
 	if !found {
 		return "", fmt.Errorf("method %s is outside the current class hierarchy", expression.Symbol)
 	}

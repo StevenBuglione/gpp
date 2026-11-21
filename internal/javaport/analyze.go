@@ -141,6 +141,7 @@ type Occurrence struct {
 	CompactRecordConstructor bool             `json:"compactRecordConstructor,omitempty"`
 	VariableArity            bool             `json:"variableArity,omitempty"`
 	Synthetic                bool             `json:"synthetic,omitempty"`
+	Nesting                  string           `json:"nesting,omitempty"`
 	// Start and End are Java compiler offsets in UTF-16 code units.
 	Start  int64 `json:"start"`
 	End    int64 `json:"end"`
@@ -222,6 +223,7 @@ type JavaExpression struct {
 	Symbol               string                 `json:"symbol,omitempty"`
 	Receiver             string                 `json:"receiver,omitempty"`
 	Static               bool                   `json:"static,omitempty"`
+	Implicit             bool                   `json:"implicit,omitempty"`
 	Arguments            []*JavaExpression      `json:"arguments,omitempty"`
 	InvocationParameters []string               `json:"invocationParameters,omitempty"`
 	FunctionSignature    *JavaFunctionSignature `json:"functionSignature,omitempty"`

@@ -36,6 +36,9 @@ func usesObjectEmitter(files []SourceFile) bool {
 				slices.ContainsFunc(declaration.Parameters, func(parameter Parameter) bool { return parameter.ErasedType != "" }) {
 				return true
 			}
+			if declaration.Owner != "" && (declaration.Kind == "CLASS" || declaration.Kind == "RECORD") {
+				return true
+			}
 			if declarationHasRuntimeAnnotations(declaration) || declaration.Owner == "" &&
 				(declaration.Kind == "INTERFACE" || declaration.Kind == "RECORD" || declaration.Kind == "ANNOTATION_TYPE" || javaIsSealed(declaration)) {
 				return true

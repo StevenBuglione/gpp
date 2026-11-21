@@ -86,7 +86,7 @@ func (program javaObjectProgram) emitPackageFacade(name, storage string) (emitte
 		if class.file.Package != name {
 			continue
 		}
-		publicName := class.declaration.Name
+		publicName := class.goTypeName()
 		emitJavaPermits(&source, class.declaration, javaPermitsAPI(publicName))
 		fmt.Fprintf(&source, "\ntype %s = %s\n", publicName,
 			program.qualify(storage, class.storageName(publicName)))
@@ -107,7 +107,7 @@ func (program javaObjectProgram) emitPackageFacade(name, storage string) (emitte
 			if !constructor.public || class.isAbstract() {
 				continue
 			}
-			parameters, arguments := program.objectParameterList(constructor.declaration.Parameters)
+			parameters, arguments := program.memberConstructorParameters(constructor)
 			name := constructor.allocatorName()
 			target := program.qualify(storage, class.storageName(name))
 			fmt.Fprintf(&source, "\nfunc %s(%s) *%s { return %s(%s) }\n",
@@ -145,5 +145,5 @@ func javaPublicConstant(field Occurrence) bool {
 }
 
 func (class *javaObjectClass) constantStorageName(field Occurrence) string {
-	return class.storageName(class.declaration.Name + field.Name)
+	return class.storageName(class.goTypeName() + field.Name)
 }

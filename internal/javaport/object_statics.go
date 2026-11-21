@@ -61,14 +61,14 @@ func (program *javaObjectProgram) addStaticMethod(class *javaObjectClass, declar
 }
 
 func (method *javaObjectMethod) staticName() string {
-	name := method.class.declaration.Name + method.goName
+	name := method.class.goTypeName() + method.goName
 	switch {
 	case method.public:
 		return name
 	case javaStaticObservable(method.declaration):
-		return "GppJavaStatic_" + method.class.declaration.Name + "_" + method.goName
+		return "GppJavaStatic_" + method.class.goTypeName() + "_" + method.goName
 	default:
-		return "javaStatic_" + method.class.declaration.Name + "_" + method.goName
+		return "javaStatic_" + method.class.goTypeName() + "_" + method.goName
 	}
 }
 
@@ -77,11 +77,11 @@ func (method *javaObjectMethod) staticAdapterName() string {
 }
 
 func (class *javaObjectClass) staticGuardName() string {
-	return "GppJavaInitialize_" + class.declaration.Name
+	return "GppJavaInitialize_" + class.goTypeName()
 }
 
 func (field javaObjectField) staticStorage() string {
-	return field.class.storageName("javaStaticField_" + field.class.declaration.Name + "_" + field.declaration.Name)
+	return field.class.storageName("javaStaticField_" + field.class.goTypeName() + "_" + field.declaration.Name)
 }
 
 func (field javaObjectField) staticAccessor(operation string) string {
@@ -89,7 +89,7 @@ func (field javaObjectField) staticAccessor(operation string) string {
 	if javaStaticObservable(field.declaration) && !(operation == "Set" && slices.Contains(field.declaration.Modifiers, "FINAL")) {
 		prefix = "Gpp"
 	}
-	return prefix + operation + "Static_" + field.class.declaration.Name + "_" + field.declaration.Name
+	return prefix + operation + "Static_" + field.class.goTypeName() + "_" + field.declaration.Name
 }
 
 func (program *javaObjectProgram) addStaticField(class *javaObjectClass, declaration Occurrence) error {
@@ -98,7 +98,7 @@ func (program *javaObjectProgram) addStaticField(class *javaObjectClass, declara
 	}
 	if declaration.Constant != nil {
 		if slices.Contains(declaration.Modifiers, "PUBLIC") {
-			return program.reserveStaticName(class, class.declaration.Name+declaration.Name)
+			return program.reserveStaticName(class, class.goTypeName()+declaration.Name)
 		}
 		return nil
 	}
@@ -158,7 +158,7 @@ func (program *javaObjectProgram) emitStaticClass(out *strings.Builder, class *j
 
 func (program *javaObjectProgram) emitStaticGuard(out *strings.Builder, class *javaObjectClass) error {
 	program.runtime = true
-	state := class.storageName("javaInitState_" + class.declaration.Name)
+	state := class.storageName("javaInitState_" + class.goTypeName())
 	fmt.Fprintf(out, "\nvar %s javart.ClassInitialization\n", state)
 	fmt.Fprintf(out, "\nfunc %s() {\n\t%s.Ensure(%q, func() {\n", class.storageName(class.staticGuardName()), state, class.declaration.Symbol)
 	// Capture this class's assertion selection before any recursive active use.
@@ -348,14 +348,14 @@ func (ctx javaObjectContext) callStatic(expression *JavaExpression, method *java
 		ctx.program.classReference(method.class, method.staticName()))
 }
 
-func (ctx javaObjectContext) orderedStaticInvocation(expression *JavaExpression, method *javaObjectMethod, result, beforeArgs, name string) (string, error) {
+func (ctx javaObjectContext) orderedStaticInvocation(expression *JavaExpression, method *javaObjectMethod, result, beforeArgs, name string, leadingArguments ...string) (string, error) {
 	parameters := method.declaration.Parameters
 	if !javaInvocationArity(expression, parameters) {
 		return "", fmt.Errorf("unsupported Java invocation arity for %s", expression.Symbol)
 	}
 	var code strings.Builder
 	fmt.Fprintf(&code, "func()%s {\n%s", result, beforeArgs)
-	arguments := make([]string, 0, len(parameters))
+	arguments := append(make([]string, 0, len(leadingArguments)+len(parameters)), leadingArguments...)
 	for index, parameter := range parameters {
 		value, err := ctx.invocationArgument(expression, index, parameter.Type)
 		if err != nil {

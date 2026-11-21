@@ -60,7 +60,7 @@ func (program *javaObjectProgram) reserveAnnotationExports() error {
 	}
 	for _, class := range program.layout {
 		if program.emitsClassAnnotations(class) {
-			if err := reserve(class.file, class.declaration, annotationElementAPI(class.declaration.Name)); err != nil {
+			if err := reserve(class.file, class.declaration, annotationElementAPI(class.goTypeName())); err != nil {
 				return err
 			}
 		}
@@ -97,9 +97,9 @@ func (program *javaObjectProgram) emitAnnotationMetadata(out *strings.Builder) e
 		}
 		parent := "nil"
 		if class.parent != nil && program.emitsClassAnnotations(class.parent) {
-			parent = program.classReference(class.parent, annotationElementAPI(class.parent.declaration.Name))
+			parent = program.classReference(class.parent, annotationElementAPI(class.parent.goTypeName()))
 		}
-		if err := program.emitAnnotatedElement(out, class.storageName(annotationElementAPI(class.declaration.Name)), class.declaration, parent); err != nil {
+		if err := program.emitAnnotatedElement(out, class.storageName(annotationElementAPI(class.goTypeName())), class.declaration, parent); err != nil {
 			return unsupportedSource(class.file, class.declaration, err.Error())
 		}
 	}
@@ -126,7 +126,7 @@ func (program *javaObjectProgram) emitAnnotationFacade(out *strings.Builder, nam
 	}
 	for _, class := range program.layout {
 		if class.file.Package == name && program.emitsClassAnnotations(class) {
-			api := annotationElementAPI(class.declaration.Name)
+			api := annotationElementAPI(class.goTypeName())
 			forward(api, "AnnotatedElement", class.storageName(api))
 		}
 	}

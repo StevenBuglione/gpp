@@ -64,6 +64,21 @@ func (ctx javaObjectContext) allocateObject(expression *JavaExpression) (string,
 	if constructor.class.isAbstract() {
 		return "", fmt.Errorf("cannot instantiate abstract Java class %s", constructor.class.declaration.Symbol)
 	}
+	if owner := constructor.class.enclosing; owner != nil {
+		outer, err := ctx.enclosingArgument(owner, expression.Target, false)
+		if err != nil {
+			return "", err
+		}
+		beforeArgs := ""
+		if guard := ctx.program.classInitialization(constructor.class); guard != "" {
+			beforeArgs = "\t" + guard + "\n"
+		}
+		// OpenJDK performs the active-use check for new before evaluating
+		// the enclosing instance expression and constructor arguments.
+		beforeArgs += "\tjavaAllocationOuter := " + outer + "\n"
+		return ctx.orderedStaticInvocation(expression, constructor, " "+ctx.program.objectGoType(expression.Type),
+			beforeArgs, ctx.program.classReference(constructor.class, constructor.allocatorName()), "javaAllocationOuter")
+	}
 	if guard := ctx.program.classInitialization(constructor.class); guard != "" {
 		return ctx.orderedStaticInvocation(expression, constructor, " "+ctx.program.objectGoType(expression.Type),
 			"\t"+guard+"\n", ctx.program.classReference(constructor.class, constructor.allocatorName()))

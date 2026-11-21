@@ -286,8 +286,7 @@ class JavaSourceAnalysis {
             if (!statements.isEmpty() && method.getReturnType() == null &&
                     statements.get(0) instanceof ExpressionStatementTree statement &&
                     statement.getExpression() instanceof MethodInvocationTree call &&
-                    call.getMethodSelect() instanceof IdentifierTree selector &&
-                    (selector.getName().contentEquals("this") || selector.getName().contentEquals("super"))) {
+                    isConstructorSelector(call.getMethodSelect())) {
                 var callPath = new TreePath(new TreePath(bodyPath, statement), call);
                 invocation += ",\"constructorCall\":" + executableExpression(callPath);
                 statements = statements.subList(1, statements.size());
@@ -297,6 +296,13 @@ class JavaSourceAnalysis {
                     method.getReturnType() == null)
                 .toList();
             return ",\"body\":" + bodyRecord(bodyPath, explicit) + invocation;
+        }
+
+        private boolean isConstructorSelector(ExpressionTree selector) {
+            if (selector instanceof IdentifierTree name) {
+                return name.getName().contentEquals("this") || name.getName().contentEquals("super");
+            }
+            return selector instanceof MemberSelectTree qualified && qualified.getIdentifier().contentEquals("super");
         }
 
         private String bodyRecord(TreePath path, List<? extends StatementTree> statements) {
@@ -547,10 +553,12 @@ class JavaSourceAnalysis {
                     attributes += ",\"name\":" + quote(identifier.getName().toString());
                 } else if (element instanceof VariableElement field && element.getKind().isField()) {
                     kind = "FIELD";
-                    attributes += fieldExpression(field, "this");
+                    attributes += fieldExpression(field, "this") + ",\"implicit\":true";
                 } else {
                     kind = "NON_PARAMETER_IDENTIFIER";
                 }
+            } else if (tree instanceof MemberSelectTree selector && selector.getIdentifier().contentEquals("this")) {
+                kind = "QUALIFIED_THIS";
             } else if (tree instanceof MemberSelectTree selector && trees.getElement(path) instanceof VariableElement field &&
                     field.getKind().isField()) {
                 var target = new TreePath(path, selector.getExpression());
@@ -569,8 +577,12 @@ class JavaSourceAnalysis {
             } else if (tree instanceof MethodInvocationTree call) {
                 var callee = call.getMethodSelect();
                 String receiver = callee instanceof MemberSelectTree selector ? receiver(path, selector.getExpression()) : "this";
-                if (callee instanceof IdentifierTree identifier && identifier.getName().contentEquals("super")) {
+                boolean qualifiedConstructor = callee instanceof MemberSelectTree selector && selector.getIdentifier().contentEquals("super");
+                if (qualifiedConstructor || (callee instanceof IdentifierTree identifier && identifier.getName().contentEquals("super"))) {
                     receiver = "super";
+                }
+                if (callee instanceof IdentifierTree && !isConstructorSelector(callee)) {
+                    attributes += ",\"implicit\":true";
                 }
                 if (callee instanceof MemberSelectTree selector &&
                         selector.getExpression() instanceof MemberSelectTree qualified &&
@@ -583,7 +595,7 @@ class JavaSourceAnalysis {
                 attributes += ",\"symbol\":" + quote(symbol) + ",\"receiver\":" + quote(receiver) +
                     callArguments(path, call.getArguments()) +
                     invocationParameters(selected, trees.getTypeMirror(calleePath));
-                if (callee instanceof MemberSelectTree selector && receiver.equals("other")) {
+                if (callee instanceof MemberSelectTree selector && (receiver.equals("other") || qualifiedConstructor)) {
                     var target = new TreePath(calleePath, selector.getExpression());
                     attributes += ",\"target\":" + executableExpression(target);
                 }
@@ -631,11 +643,14 @@ class JavaSourceAnalysis {
                     attributes += ",\"target\":" + executableExpression(qualifierPath);
                 }
             } else if (tree instanceof NewClassTree call) {
-                if (call.getEnclosingExpression() == null && call.getClassBody() == null) {
+                if (call.getClassBody() == null) {
                     var selected = trees.getElement(path);
                     attributes += ",\"symbol\":" + quote(symbol(selected)) + callArguments(path, call.getArguments());
                     if (call instanceof JCNewClass attributed) {
                         attributes += invocationParameters(selected, attributed.constructorType);
+                    }
+                    if (call.getEnclosingExpression() != null) {
+                        attributes += ",\"target\":" + executableExpression(new TreePath(path, call.getEnclosingExpression()));
                     }
                 }
             } else if (tree instanceof NewArrayTree array) {
@@ -854,7 +869,8 @@ class JavaSourceAnalysis {
                     result += ",\"erasedSupertypes\":[" + erasures.stream().map(JavaSourceAnalysis::quote)
                         .collect(Collectors.joining(",")) + "]";
                 }
-                return result + ",\"supertypes\":[" + supertypes.stream().map(JavaSourceAnalysis::quote)
+                return result + ",\"nesting\":" + quote(type.getNestingKind().name()) +
+                    ",\"supertypes\":[" + supertypes.stream().map(JavaSourceAnalysis::quote)
                     .collect(Collectors.joining(",")) + "]" +
                     ",\"hasTypeParams\":" + !type.getTypeParameters().isEmpty();
             }

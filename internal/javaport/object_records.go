@@ -120,7 +120,7 @@ func (ctx javaObjectContext) invokeRecordReference(expression *JavaExpression) (
 
 func (ctx javaObjectContext) emitRecordMethod(out *strings.Builder, method *javaObjectMethod) error {
 	class := ctx.class
-	name := class.storageName(class.declaration.Name)
+	name := class.storageName(class.goTypeName())
 	declaration := method.declaration
 	components := class.declaration.RecordComponents
 	parameters, arguments := ctx.program.objectParameterList(declaration.Parameters)

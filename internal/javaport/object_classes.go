@@ -11,9 +11,11 @@ import (
 type javaObjectClass struct {
 	file                   SourceFile
 	declaration            Occurrence
+	goName                 string
 	storagePackage         string
 	symbolPrefix           string
 	parent                 *javaObjectClass
+	enclosing              *javaObjectClass
 	fields                 []Occurrence
 	initializers           []Occurrence
 	staticInitializers     []Occurrence
@@ -68,6 +70,7 @@ type javaObjectProgram struct {
 	lambdaNext        int
 	annotationTypes   map[string]*javaAnnotationType
 	annotationMembers map[string][]Occurrence
+	memberTypeNames   map[string]string
 }
 
 func emitJavaObjects(report Report) (string, error) {
@@ -91,6 +94,7 @@ func prepareJavaObjects(files []SourceFile) (*javaObjectProgram, error) {
 		annotationTypes: map[string]*javaAnnotationType{}, annotationMembers: map[string][]Occurrence{},
 	}
 	var classes []*javaObjectClass
+	members := map[string]javaMemberDeclaration{}
 	permitted := map[string]bool{}
 	for _, file := range files {
 		for _, declaration := range file.Declarations {
@@ -107,7 +111,13 @@ func prepareJavaObjects(files []SourceFile) (*javaObjectProgram, error) {
 			program.exports[file.Package] = map[string]bool{}
 		}
 		for _, declaration := range file.Declarations {
+			if declaration.Nesting == "LOCAL" || declaration.Nesting == "ANONYMOUS" {
+				return nil, unsupportedSource(file, declaration, "local and anonymous Java classes are unsupported")
+			}
 			if declaration.Owner != "" {
+				if declaration.Kind == "CLASS" || declaration.Kind == "RECORD" {
+					members[declaration.Symbol] = javaMemberDeclaration{file, declaration}
+				}
 				continue
 			}
 			if declaration.Kind == "ANNOTATION_TYPE" {
@@ -141,11 +151,22 @@ func prepareJavaObjects(files []SourceFile) (*javaObjectProgram, error) {
 			program.exports[file.Package][declaration.Name] = true
 		}
 	}
+	memberClasses, err := program.addMemberClasses(members)
+	if err != nil {
+		return nil, err
+	}
+	classes = append(classes, memberClasses...)
+	for _, class := range classes {
+		class.declaration = program.resolveMemberTypes(class.declaration)
+	}
 	if err := program.validateSealedTypes(); err != nil {
 		return nil, err
 	}
 	for _, file := range files {
 		for _, declaration := range file.Declarations {
+			if program.classes[declaration.Symbol] != nil && (declaration.Kind == "CLASS" || declaration.Kind == "RECORD") {
+				continue
+			}
 			if (declaration.Kind == "CLASS" || declaration.Kind == "INTERFACE" || declaration.Kind == "RECORD" || declaration.Kind == "ANNOTATION_TYPE") && declaration.Owner == "" {
 				continue
 			}
@@ -165,7 +186,7 @@ func prepareJavaObjects(files []SourceFile) (*javaObjectProgram, error) {
 				owner = declaration.InitializerOwner
 			}
 			if iface := program.interfaces[owner]; iface != nil {
-				if err := program.addInterfaceMember(iface, declaration); err != nil {
+				if err := program.addInterfaceMember(iface, program.resolveMemberTypes(declaration)); err != nil {
 					return nil, unsupportedSource(file, declaration, err.Error())
 				}
 				continue
@@ -174,7 +195,7 @@ func prepareJavaObjects(files []SourceFile) (*javaObjectProgram, error) {
 			if !ok {
 				return nil, unsupportedSource(file, declaration, "nested or non-class declaration")
 			}
-			if err := program.addMember(class, declaration); err != nil {
+			if err := program.addMember(class, program.resolveMemberTypes(declaration)); err != nil {
 				return nil, unsupportedSource(file, declaration, err.Error())
 			}
 		}
@@ -294,7 +315,7 @@ func (program *javaObjectProgram) addMethod(class *javaObjectClass, declaration 
 			return fmt.Errorf("variable-arity record constructors require Java varargs lowering")
 		}
 		suffix := constructorSuffix(declaration.Parameters)
-		method.goName = "New" + class.declaration.Name + suffix
+		method.goName = "New" + class.goTypeName() + suffix
 		method.internal = "javaInit" + suffix
 		for _, previous := range class.constructors {
 			if method.internal == previous.internal {
@@ -471,6 +492,7 @@ func constructorSuffix(parameters []Parameter) string {
 			continue
 		}
 		name = name[strings.LastIndex(name, ".")+1:]
+		name = strings.ReplaceAll(name, "$", "_")
 		name = strings.ReplaceAll(name, "[]", "Array")
 		types = append(types, exportMethodName(name))
 	}
@@ -496,14 +518,14 @@ func (method *javaObjectMethod) allocatorName() string {
 }
 
 func objectViewName(class *javaObjectClass) string {
-	return "GppAs" + class.declaration.Name
+	return "GppAs" + class.goTypeName()
 }
 
 func (class *javaObjectClass) baseField() string {
 	if class.file.Package != class.parent.file.Package {
-		return "javaImportedBase" + class.storageName(class.declaration.Name)
+		return "javaImportedBase" + class.storageName(class.goTypeName())
 	}
-	return "javaBase" + class.parent.storageName(class.parent.declaration.Name)
+	return "javaBase" + class.parent.storageName(class.parent.goTypeName())
 }
 
 func (class *javaObjectClass) storageName(name string) string {
@@ -517,7 +539,7 @@ func (class *javaObjectClass) storageName(name string) string {
 }
 
 func (method *javaObjectMethod) bridgeName(operation string) string {
-	return "GppJava" + operation + "_" + method.class.declaration.Name + "_" + method.internal
+	return "GppJava" + operation + "_" + method.class.goTypeName() + "_" + method.internal
 }
 
 func (method *javaObjectMethod) hasErrorAdapter() bool {

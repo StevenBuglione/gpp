@@ -40,7 +40,7 @@ func (class *javaObjectClass) findAssertions() {
 
 func (class *javaObjectClass) assertionStatus() javaAssertionStatus {
 	return javaAssertionStatus{
-		storage:   class.storageName("javaAssertions" + class.declaration.Name),
+		storage:   class.storageName("javaAssertions" + class.goTypeName()),
 		className: class.declaration.Symbol,
 	}
 }

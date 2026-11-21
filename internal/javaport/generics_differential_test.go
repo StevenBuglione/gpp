@@ -46,12 +46,24 @@ public final class Tools {
     public static <T> T identity(T value) { return value; }
     public static <N extends Number> int number(N value) { return value.intValue(); }
 }`},
+		{"Shelf", `package reference.generics.model;
+public class Shelf<T> {
+    private T stored;
+    public Shelf(T value) { stored = value; }
+    @Deprecated public class Entry<V> {
+        private V key;
+        public Entry(V key) { this.key = key; }
+        public V key() { return key; }
+        public T outerValue() { return Shelf.this.stored; }
+    }
+}`},
 		{"Calls", `package reference.generics.client;
 import reference.generics.api.Carrier;
 import reference.generics.api.Mapper;
 import reference.generics.model.Box;
 import reference.generics.model.Derived;
 import reference.generics.model.NumberBox;
+import reference.generics.model.Shelf;
 import reference.generics.model.Tools;
 public class Calls {
     public Box<String> diamond(String value) { return new Box<>(value); }
@@ -94,6 +106,10 @@ public class Calls {
     public Mapper<String, String> genericMethodMapper() { return Tools::identity; }
     public Mapper<String, Box<String>> constructorMapper() { return Box<String>::new; }
     public int apply(Mapper<String, Integer> source) { return source.apply("abcd"); }
+    public String nested(Shelf<String> shelf) {
+        var entry = shelf.new Entry<Integer>(3);
+        return entry.outerValue() + ":" + entry.key();
+    }
     public int badMapper() {
         Mapper raw = mapper();
         try { raw.apply(2); return 0; }
@@ -124,6 +140,8 @@ class Probe {
         System.out.println(calls.mapper().apply(null) + " " + calls.apply(calls.mapper()) + " " +
             calls.apply(calls.methodMapper()) + " " + calls.genericMethodMapper().apply("kept") + " " +
             calls.constructorMapper().apply("constructed").get() + " " + calls.badMapper());
+        System.out.println(calls.nested(new Shelf<>("shelf")) + " " +
+            Shelf.Entry.class.isAnnotationPresent(Deprecated.class));
     }
 }`)
 	classes := filepath.Join(root, "classes")
@@ -205,6 +223,8 @@ func main() {
     fmt.Println(java.UnboxInteger(calls.Mapper().Apply(nil).(*java.Integer)), calls.Apply(calls.Mapper()),
         calls.Apply(calls.MethodMapper()), asText(calls.GenericMethodMapper().Apply(java.StringFromGo("kept")).(*java.String)),
         asText(calls.ConstructorMapper().Apply(java.StringFromGo("constructed")).(*model.Box).Get().(*java.String)), calls.BadMapper())
+    fmt.Println(asText(calls.Nested(model.NewShelfWithObject(java.StringFromGo("shelf")))),
+        len(model.GppJavaAnnotations_Shelf_Entry().GetDeclaredAnnotations()) == 1)
 }
 `)
 	if got := runObjectTestCommand(t, external, "go", "run", "-buildvcs=false", "-mod=mod", "."); got != want {

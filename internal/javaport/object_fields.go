@@ -15,7 +15,7 @@ func (field javaObjectField) final() bool {
 }
 
 func (field javaObjectField) bridgeName(operation string) string {
-	return "GppJava" + operation + "Field_" + field.class.declaration.Name + "_" + field.declaration.Name
+	return "GppJava" + operation + "Field_" + field.class.goTypeName() + "_" + field.declaration.Name
 }
 
 func (program *javaObjectProgram) emitInstanceFieldBridges(out *strings.Builder, class *javaObjectClass, className string) error {
@@ -72,6 +72,13 @@ func (ctx javaObjectContext) instanceField(expression *JavaExpression) (javaInst
 		return access, nil
 	}
 	if ctx.class != nil && (expression.Receiver == "this" || expression.Receiver == "super") {
+		if expression.Implicit {
+			inherited := !slices.Contains(field.declaration.Modifiers, "PRIVATE")
+			if receiver, ok := ctx.lexicalReceiver(field.class, inherited, false); ok {
+				access.receiver = receiver
+				return access, nil
+			}
+		}
 		if receiver, ok := ctx.class.memberReceiver(field.class); ok {
 			access.receiver = receiver
 			return access, nil

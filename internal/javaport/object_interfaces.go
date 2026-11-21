@@ -412,6 +412,9 @@ func (ctx javaObjectContext) defaultCall(method *javaInterfaceMethod, receiver, 
 
 func (ctx javaObjectContext) invokeInterface(expression *JavaExpression, method *javaInterfaceMethod) (string, error) {
 	receiver := "this"
+	if expression.Implicit && ctx.class != nil {
+		receiver = ctx.lexicalInterfaceReceiver(method.owner)
+	}
 	if expression.Target != nil {
 		var err error
 		receiver, err = ctx.expression(expression.Target)
