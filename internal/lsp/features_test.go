@@ -1189,6 +1189,23 @@ func use(widget Widget) { _ = widget. }
 	}
 }
 
+func TestCompletionRecoveryUsesFreshDocumentCaches(t *testing.T) {
+	source := "package main\nfunc use(widget Widget) { widget. }\n"
+	state := &fileState{Path: "widget.gpp", Source: source, Open: true, Version: 12, HasVersion: true}
+	state.goHoverMu.Lock()
+	defer state.goHoverMu.Unlock()
+
+	cursor := strings.Index(source, "widget.") + len("widget.")
+	recovered := completionState(state, cursor)
+	if recovered == state || recovered.File == nil || recovered.Version != 12 {
+		t.Fatalf("expected a parsed completion document preserving the current version, got %#v", recovered)
+	}
+	if !recovered.goHoverMu.TryLock() {
+		t.Fatal("completion recovery copied the original document's locked cache mutex")
+	}
+	recovered.goHoverMu.Unlock()
+}
+
 func TestImportedStandardLibraryPackageCompletion(t *testing.T) {
 	source := `package main
 import "os"

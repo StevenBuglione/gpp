@@ -6809,10 +6809,15 @@ func completionState(state *fileState, offset int) *fileState {
 		return state
 	}
 	file.SourcePath = state.Path
-	recovered := *state
-	recovered.Source = source
-	recovered.File = file
-	return &recovered
+	return &fileState{
+		Path:       state.Path,
+		URI:        state.URI,
+		Source:     source,
+		Open:       state.Open,
+		Version:    state.Version,
+		HasVersion: state.HasVersion,
+		File:       file,
+	}
 }
 
 func (s *server) resolveCompletionItem(item CompletionItem) CompletionItem {
