@@ -38,8 +38,8 @@ func (program *javaObjectProgram) addInterface(file SourceFile, declaration Occu
 	visible := slices.Contains(declaration.Modifiers, "PUBLIC") || permitted || javaIsSealed(declaration)
 	if !token.IsExported(declaration.Name) || !token.IsIdentifier(declaration.Name) ||
 		!hasOnlyModifiers(declaration, "PUBLIC", "ABSTRACT", "SEALED", "NON_SEALED") || !visible ||
-		!annotationsSupported || declaration.HasTypeParams {
-		return fmt.Errorf("expected a public non-generic Java interface")
+		!annotationsSupported {
+		return fmt.Errorf("expected a public Java interface")
 	}
 	if program.exports[file.Package][declaration.Name] {
 		return fmt.Errorf("duplicate Go interface name")
@@ -59,7 +59,7 @@ func (program *javaObjectProgram) addInterfaceMember(iface *javaInterface, decla
 	case "METHOD":
 		abstract := slices.Contains(declaration.Modifiers, "ABSTRACT")
 		isDefault := slices.Contains(declaration.Modifiers, "DEFAULT")
-		if declaration.HasTypeParams || !hasOnlyModifiers(declaration, "PUBLIC", "ABSTRACT", "DEFAULT") ||
+		if !hasOnlyModifiers(declaration, "PUBLIC", "ABSTRACT", "DEFAULT") ||
 			abstract == isDefault || (isDefault && declaration.Body == nil) {
 			return fmt.Errorf("expected an abstract or attributed default Java interface method")
 		}

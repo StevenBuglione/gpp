@@ -32,6 +32,10 @@ func EmitGPP(report Report) (string, error) {
 func usesObjectEmitter(files []SourceFile) bool {
 	for _, file := range files {
 		for _, declaration := range file.Declarations {
+			if declaration.HasTypeParams || declaration.ErasedResult != "" || declaration.ErasedType != "" ||
+				slices.ContainsFunc(declaration.Parameters, func(parameter Parameter) bool { return parameter.ErasedType != "" }) {
+				return true
+			}
 			if declaration.Owner == "" && (declaration.Kind == "INTERFACE" || declaration.Kind == "RECORD" || javaIsSealed(declaration)) {
 				return true
 			}

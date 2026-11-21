@@ -79,7 +79,18 @@ func (ctx javaObjectContext) updateVariable(target, operand *JavaExpression, ope
 		}
 		setup = "\tjavaUpdateReceiver := " + field.checkedReceiver(field.receiver) + "\n"
 		load = field.read("javaUpdateReceiver")
-		store, err = field.write("javaUpdateReceiver", "javaUpdateNew")
+		stored := "javaUpdateNew"
+		if storageType := field.field.declaration.Type; storageType != javaType {
+			load, err = ctx.adaptErasedRead(load, storageType, javaType)
+			if err != nil {
+				return "", err
+			}
+			stored, err = ctx.convertValue(stored, javaType, storageType)
+			if err != nil {
+				return "", err
+			}
+		}
+		store, err = field.write("javaUpdateReceiver", stored)
 		if err != nil {
 			return "", err
 		}

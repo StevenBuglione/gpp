@@ -22,7 +22,7 @@ func (program *javaObjectProgram) reserveStaticName(class *javaObjectClass, name
 }
 
 func (program *javaObjectProgram) addStaticMethod(class *javaObjectClass, declaration Occurrence) error {
-	if declaration.Name == "<init>" || declaration.HasTypeParams || declaration.Body == nil ||
+	if declaration.Name == "<init>" || declaration.Body == nil ||
 		!hasOnlyModifiers(declaration, "STATIC", "FINAL", "PUBLIC", "PROTECTED", "PRIVATE") {
 		return fmt.Errorf("unsupported Java static method modifiers, body, or type parameters")
 	}
@@ -350,14 +350,14 @@ func (ctx javaObjectContext) callStatic(expression *JavaExpression, method *java
 
 func (ctx javaObjectContext) orderedStaticInvocation(expression *JavaExpression, method *javaObjectMethod, result, beforeArgs, name string) (string, error) {
 	parameters := method.declaration.Parameters
-	if len(parameters) != len(expression.Arguments) {
+	if !javaInvocationArity(expression, parameters) {
 		return "", fmt.Errorf("unsupported Java invocation arity for %s", expression.Symbol)
 	}
 	var code strings.Builder
 	fmt.Fprintf(&code, "func()%s {\n%s", result, beforeArgs)
 	arguments := make([]string, 0, len(parameters))
 	for index, parameter := range parameters {
-		value, err := ctx.converted(expression.Arguments[index], parameter.Type)
+		value, err := ctx.invocationArgument(expression, index, parameter.Type)
 		if err != nil {
 			return "", err
 		}

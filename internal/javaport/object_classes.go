@@ -107,6 +107,7 @@ func prepareJavaObjects(files []SourceFile) (*javaObjectProgram, error) {
 			if declaration.Owner != "" {
 				continue
 			}
+			declaration = eraseJavaObjectDeclaration(declaration)
 			if declaration.Kind == "INTERFACE" {
 				if err := program.addInterface(file, declaration, permitted[declaration.Symbol]); err != nil {
 					return nil, unsupportedSource(file, declaration, err.Error())
@@ -119,8 +120,8 @@ func prepareJavaObjects(files []SourceFile) (*javaObjectProgram, error) {
 			visible := slices.Contains(declaration.Modifiers, "PUBLIC") || permitted[declaration.Symbol] || javaIsSealed(declaration)
 			if !token.IsExported(declaration.Name) || !token.IsIdentifier(declaration.Name) || !visible ||
 				!hasOnlyModifiers(declaration, "PUBLIC", "FINAL", "ABSTRACT", "SEALED", "NON_SEALED") ||
-				!onlySourceAnnotations(declaration) || declaration.HasTypeParams {
-				return nil, unsupportedSource(file, declaration, "expected a public non-generic class with at most one superclass")
+				!onlySourceAnnotations(declaration) {
+				return nil, unsupportedSource(file, declaration, "expected a public class with at most one superclass")
 			}
 			if program.exports[file.Package][declaration.Name] {
 				return nil, unsupportedSource(file, declaration, "duplicate Go class name")
@@ -140,6 +141,7 @@ func prepareJavaObjects(files []SourceFile) (*javaObjectProgram, error) {
 				continue
 			}
 			owner := declaration.Owner
+			declaration = eraseJavaObjectDeclaration(declaration)
 			if declaration.Kind == "BLOCK" {
 				owner = declaration.InitializerOwner
 			}
@@ -257,7 +259,7 @@ func (program *javaObjectProgram) addMember(class *javaObjectClass, declaration 
 
 func (program *javaObjectProgram) addMethod(class *javaObjectClass, declaration Occurrence) error {
 	abstract := slices.Contains(declaration.Modifiers, "ABSTRACT")
-	if declaration.HasTypeParams || (declaration.Body == nil) != abstract ||
+	if (declaration.Body == nil) != abstract ||
 		(abstract && (!class.isAbstract() || declaration.Name == "<init>")) ||
 		!hasOnlyModifiers(declaration, "PUBLIC", "PRIVATE", "PROTECTED", "FINAL", "ABSTRACT") {
 		return fmt.Errorf("unsupported constructor or method modifiers, body, or type parameters")

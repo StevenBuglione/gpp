@@ -113,7 +113,14 @@ func (ctx javaObjectContext) assignInstanceField(target, source *JavaExpression)
 	if err != nil {
 		return "", err
 	}
-	store, err := field.write(field.checkedReceiver("javaFieldReceiver"), "javaFieldValue")
+	stored := "javaFieldValue"
+	if storageType := field.field.declaration.Type; storageType != target.Type {
+		stored, err = ctx.convertValue(stored, target.Type, storageType)
+		if err != nil {
+			return "", err
+		}
+	}
+	store, err := field.write(field.checkedReceiver("javaFieldReceiver"), stored)
 	if err != nil {
 		return "", err
 	}

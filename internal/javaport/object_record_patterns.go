@@ -20,7 +20,7 @@ func (ctx javaObjectContext) instanceOfRecordPattern(expression *JavaExpression)
 	if source != "null" && !ctx.program.referenceType(source) {
 		return "", fmt.Errorf("unsupported Java record pattern operand %s", source)
 	}
-	value, err := ctx.expression(expression.Operand)
+	value, err := ctx.referenceTestValue(expression.Operand)
 	if err != nil {
 		return "", err
 	}

@@ -56,6 +56,8 @@ import com.sun.source.util.TreePath;
 import com.sun.source.util.TreePathScanner;
 import com.sun.source.util.Trees;
 import com.sun.tools.javac.code.Type;
+import com.sun.tools.javac.tree.JCTree.JCMemberReference;
+import com.sun.tools.javac.tree.JCTree.JCNewClass;
 import java.lang.reflect.Method;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
@@ -572,11 +574,14 @@ class JavaSourceAnalysis {
                         qualified.getIdentifier().contentEquals("super")) {
                     receiver = "interface-super";
                 }
-                String symbol = symbol(trees.getElement(path));
+                var selected = trees.getElement(path);
+                var calleePath = new TreePath(path, callee);
+                String symbol = symbol(selected);
                 attributes += ",\"symbol\":" + quote(symbol) + ",\"receiver\":" + quote(receiver) +
-                    callArguments(path, call.getArguments());
+                    callArguments(path, call.getArguments()) +
+                    invocationParameters(selected, trees.getTypeMirror(calleePath));
                 if (callee instanceof MemberSelectTree selector && receiver.equals("other")) {
-                    var target = new TreePath(new TreePath(path, callee), selector.getExpression());
+                    var target = new TreePath(calleePath, selector.getExpression());
                     attributes += ",\"target\":" + executableExpression(target);
                 }
             } else if (tree instanceof LambdaExpressionTree lambda) {
@@ -599,6 +604,11 @@ class JavaSourceAnalysis {
                 var qualifierType = trees.getTypeMirror(qualifierPath);
                 var selected = trees.getElement(path);
                 var result = selected instanceof ExecutableElement method ? method.getReturnType() : null;
+                var referent = reference instanceof JCMemberReference attributed ? attributed.referentType : null;
+                if (referent instanceof ExecutableType executable) {
+                    result = executable.getReturnType();
+                    attributes += invocationParameters(selected, executable);
+                }
                 String form = receiver(path, qualifier);
                 if (reference.getMode() == MemberReferenceTree.ReferenceMode.NEW) {
                     form = qualifierType instanceof ArrayType ? "array-constructor" : "constructor";
@@ -617,8 +627,11 @@ class JavaSourceAnalysis {
                 }
             } else if (tree instanceof NewClassTree call) {
                 if (call.getEnclosingExpression() == null && call.getClassBody() == null) {
-                    attributes += ",\"symbol\":" + quote(symbol(trees.getElement(path))) +
-                        callArguments(path, call.getArguments());
+                    var selected = trees.getElement(path);
+                    attributes += ",\"symbol\":" + quote(symbol(selected)) + callArguments(path, call.getArguments());
+                    if (call instanceof JCNewClass attributed) {
+                        attributes += invocationParameters(selected, attributed.constructorType);
+                    }
                 }
             } else if (tree instanceof NewArrayTree array) {
                 var initializers = array.getInitializers();
@@ -693,6 +706,20 @@ class JavaSourceAnalysis {
                 .collect(Collectors.joining(",")) + "]";
         }
 
+        private String invocationParameters(Element selected, TypeMirror type) {
+            if (!(selected instanceof ExecutableElement method) || !(type instanceof ExecutableType signature)) {
+                return "";
+            }
+            var parameters = signature.getParameterTypes().stream().map(this::expressionType).toList();
+            var erased = method.getParameters().stream()
+                .map(parameter -> expressionType(types.erasure(parameter.asType()))).toList();
+            if (parameters.equals(erased)) {
+                return "";
+            }
+            return ",\"invocationParameters\":[" + parameters.stream().map(JavaSourceAnalysis::quote)
+                .collect(Collectors.joining(",")) + "]";
+        }
+
         private String expressionType(TypeMirror type) {
             if (type == null) {
                 return "";
@@ -706,7 +733,21 @@ class JavaSourceAnalysis {
             if (type instanceof ArrayType array) {
                 return expressionType(array.getComponentType()) + "[]";
             }
+            if (type instanceof TypeVariable) {
+                return expressionType(types.erasure(type));
+            }
             return type.getKind().name().toLowerCase(Locale.ROOT);
+        }
+
+        private String erasedTypeAttribute(String key, TypeMirror type) {
+            String erased = expressionType(types.erasure(type));
+            return erased.equals(type.toString()) ? "" : "," + quote(key) + ":" + quote(erased);
+        }
+
+        private String parameterRecord(Element parameter) {
+            TypeMirror type = parameter.asType();
+            return "{\"name\":" + quote(parameter.getSimpleName().toString()) +
+                ",\"type\":" + quote(type.toString()) + erasedTypeAttribute("erasedType", type) + "}";
         }
 
         private String fieldExpression(VariableElement field, String receiver) {
@@ -754,9 +795,7 @@ class JavaSourceAnalysis {
                 result += ",\"typeParameters\":[" + parameters + "]";
             }
             if (element instanceof ExecutableElement method) {
-                var parameters = method.getParameters().stream().map(parameter ->
-                    "{\"name\":" + quote(parameter.getSimpleName().toString()) +
-                    ",\"type\":" + quote(parameter.asType().toString()) + "}").collect(Collectors.joining(","));
+                var parameters = method.getParameters().stream().map(this::parameterRecord).collect(Collectors.joining(","));
                 var thrown = method.getThrownTypes().stream().map(type -> quote(type.toString()))
                     .collect(Collectors.joining(","));
                 if (method.getDefaultValue() != null) {
@@ -766,6 +805,7 @@ class JavaSourceAnalysis {
                     result += ",\"variableArity\":true";
                 }
                 return result + ",\"result\":" + quote(method.getReturnType().toString()) +
+                    erasedTypeAttribute("erasedResult", method.getReturnType()) +
                     ",\"parameters\":[" + parameters + "],\"thrown\":[" + thrown + "]" +
                     ",\"hasTypeParams\":" + !method.getTypeParameters().isEmpty();
             }
@@ -777,16 +817,20 @@ class JavaSourceAnalysis {
                     result += ",\"permittedSubclasses\":[" + permitted + "]";
                 }
                 if (type.getKind() == ElementKind.RECORD) {
-                    var components = type.getRecordComponents().stream().map(component ->
-                        "{\"name\":" + quote(component.getSimpleName().toString()) +
-                        ",\"type\":" + quote(component.asType().toString()) + "}")
+                    var components = type.getRecordComponents().stream().map(this::parameterRecord)
                         .collect(Collectors.joining(","));
                     result += ",\"recordComponents\":[" + components + "]";
                 }
-                var supertypes = types.directSupertypes(type.asType()).stream()
-                    .map(parent -> parent.toString()).filter(parent -> !parent.equals("java.lang.Object"))
-                    .map(JavaSourceAnalysis::quote).collect(Collectors.joining(","));
-                return result + ",\"supertypes\":[" + supertypes + "]" +
+                var parents = types.directSupertypes(type.asType()).stream()
+                    .filter(parent -> !parent.toString().equals("java.lang.Object")).toList();
+                var supertypes = parents.stream().map(Object::toString).toList();
+                var erasures = parents.stream().map(parent -> expressionType(types.erasure(parent))).toList();
+                if (!erasures.equals(supertypes)) {
+                    result += ",\"erasedSupertypes\":[" + erasures.stream().map(JavaSourceAnalysis::quote)
+                        .collect(Collectors.joining(",")) + "]";
+                }
+                return result + ",\"supertypes\":[" + supertypes.stream().map(JavaSourceAnalysis::quote)
+                    .collect(Collectors.joining(",")) + "]" +
                     ",\"hasTypeParams\":" + !type.getTypeParameters().isEmpty();
             }
             if (element instanceof VariableElement variable && variable.getConstantValue() != null) {
@@ -797,6 +841,9 @@ class JavaSourceAnalysis {
                 String spelling = constant instanceof Character character ?
                     Integer.toString(character) : constant.toString();
                 return result + ",\"constant\":" + quote(spelling);
+            }
+            if (element instanceof VariableElement variable) {
+                result += erasedTypeAttribute("erasedType", variable.asType());
             }
             return result;
         }

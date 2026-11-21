@@ -81,7 +81,11 @@ func (ctx javaObjectContext) arrayTypeTest(operand *JavaExpression, javaType, me
 	if err != nil {
 		return "", err
 	}
-	value, err := ctx.expression(operand)
+	read := ctx.expression
+	if method == "ArrayInstanceOf" {
+		read = ctx.referenceTestValue
+	}
+	value, err := read(operand)
 	if err != nil {
 		return "", err
 	}

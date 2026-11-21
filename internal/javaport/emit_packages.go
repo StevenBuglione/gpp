@@ -78,7 +78,7 @@ func EmitGPPPackages(report Report) ([]EmittedPackage, error) {
 func packageHasJavaTypes(files []SourceFile) bool {
 	for _, file := range files {
 		for _, declaration := range file.Declarations {
-			if declaration.Owner == "" && (declaration.Kind == "CLASS" || declaration.Kind == "INTERFACE") {
+			if declaration.Owner == "" && (declaration.Kind == "CLASS" || declaration.Kind == "INTERFACE" || declaration.Kind == "RECORD") {
 				return true
 			}
 		}

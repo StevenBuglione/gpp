@@ -386,6 +386,9 @@ func (ctx javaObjectContext) statement(statement JavaStatement, result string) (
 		if expression.Kind == "METHOD_INVOCATION" {
 			return ctx.invoke(expression)
 		}
+		if expression.Kind == "NEW_CLASS" {
+			return ctx.expression(expression)
+		}
 		switch expression.Kind {
 		case "ASSIGNMENT":
 			return ctx.assignment(expression, false)
@@ -403,11 +406,21 @@ func (ctx javaObjectContext) converted(expression *JavaExpression, target string
 	if conditional := nullConditional(expression); conditional != nil {
 		return emitJavaConditional(conditional, target, ctx.program.objectGoType, ctx.converted)
 	}
+	source := expression.Type
+	erased := ctx.erasedReadType(expression)
+	if erased != source && ctx.program.canConvertReference(source, target) && ctx.canUseErasedRead(erased, target) {
+		// A widening reference use can consume the erased value directly.
+		value, err := ctx.rawExpression(javaMutationOperand(expression))
+		if err != nil {
+			return "", err
+		}
+		return ctx.convertValue(value, erased, target)
+	}
 	value, err := ctx.expression(expression)
 	if err != nil {
 		return "", err
 	}
-	return ctx.convertValue(value, expression.Type, target)
+	return ctx.convertValue(value, source, target)
 }
 
 func (ctx javaObjectContext) convertValue(value, source, target string) (string, error) {
@@ -418,6 +431,17 @@ func (ctx javaObjectContext) convertValue(value, source, target string) (string,
 }
 
 func (ctx javaObjectContext) expression(expression *JavaExpression) (string, error) {
+	if erased := ctx.erasedReadType(expression); erased != expression.Type {
+		value, err := ctx.rawExpression(javaMutationOperand(expression))
+		if err != nil {
+			return "", err
+		}
+		return ctx.adaptErasedRead(value, erased, expression.Type)
+	}
+	return ctx.rawExpression(expression)
+}
+
+func (ctx javaObjectContext) rawExpression(expression *JavaExpression) (string, error) {
 	switch expression.Kind {
 	case "THIS":
 		return "this", nil
@@ -616,12 +640,12 @@ func (ctx javaObjectContext) invoke(expression *JavaExpression) (string, error) 
 
 func (ctx javaObjectContext) callArguments(call *JavaExpression, callee *javaObjectMethod) (string, error) {
 	parameters := callee.declaration.Parameters
-	if len(call.Arguments) != len(parameters) {
+	if !javaInvocationArity(call, parameters) {
 		return "", fmt.Errorf("unsupported Java invocation arity for %s", call.Symbol)
 	}
 	values := make([]string, 0, len(parameters))
-	for index, argument := range call.Arguments {
-		value, err := ctx.converted(argument, parameters[index].Type)
+	for index, parameter := range parameters {
+		value, err := ctx.invocationArgument(call, index, parameter.Type)
 		if err != nil {
 			return "", err
 		}

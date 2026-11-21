@@ -85,6 +85,10 @@ func (ctx javaObjectContext) castIntersection(operand *JavaExpression, target st
 	if err != nil {
 		return "", err
 	}
+	return ctx.checkIntersection(value, target), nil
+}
+
+func (ctx javaObjectContext) checkIntersection(value, target string) string {
 	var code strings.Builder
 	fmt.Fprintf(&code, "func() any {\n\tjavaIntersection := %s\n", ctx.program.primitiveLowering.canonicalReference(value))
 	for _, bound := range splitJavaIntersection(target) {
@@ -92,7 +96,7 @@ func (ctx javaObjectContext) castIntersection(operand *JavaExpression, target st
 		fmt.Fprintf(&code, "\t_ = %s\n", check)
 	}
 	code.WriteString("\treturn javaIntersection\n}()")
-	return code.String(), nil
+	return code.String()
 }
 
 func (program *javaObjectProgram) lambdaAdapter(target string) (*javaLambdaAdapter, error) {

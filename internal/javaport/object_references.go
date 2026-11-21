@@ -87,14 +87,14 @@ func (ctx javaObjectContext) invokeReference(expression *JavaExpression, method 
 
 func (ctx javaObjectContext) emitReferenceInvocation(expression *JavaExpression, declaration Occurrence, target string, invoke func(string, string) string) (string, error) {
 	parameters := declaration.Parameters
-	if len(expression.Arguments) != len(parameters) {
+	if !javaInvocationArity(expression, parameters) {
 		return "", fmt.Errorf("unsupported Java invocation arity for %s", expression.Symbol)
 	}
 	var code strings.Builder
 	fmt.Fprintf(&code, "func()%s {\n\tjavaReceiver := %s\n", ctx.program.interfaceResult(declaration), target)
 	args := make([]string, 0, len(parameters))
-	for index, argument := range expression.Arguments {
-		value, err := ctx.converted(argument, parameters[index].Type)
+	for index, parameter := range parameters {
+		value, err := ctx.invocationArgument(expression, index, parameter.Type)
 		if err != nil {
 			return "", err
 		}
@@ -244,7 +244,7 @@ func (ctx javaObjectContext) instanceOf(expression *JavaExpression) (string, err
 	if ctx.arrayElementType(target) != "" {
 		return ctx.arrayTypeTest(expression.Operand, target, "ArrayInstanceOf")
 	}
-	value, err := ctx.expression(expression.Operand)
+	value, err := ctx.referenceTestValue(expression.Operand)
 	if err != nil {
 		return "", err
 	}
@@ -259,7 +259,13 @@ func (ctx javaObjectContext) referenceComparison(expression *JavaExpression) (st
 	if primitiveEquality(expression) {
 		return ctx.program.primitiveLowering.binary(expression, ctx.expression)
 	}
-	return referenceComparison(expression, ctx.program.canConvertReference, ctx.converted)
+	convert := ctx.converted
+	if ctx.erasedReadType(expression.Left) != expression.Left.Type || ctx.erasedReadType(expression.Right) != expression.Right.Type {
+		convert = func(operand *JavaExpression, _ string) (string, error) {
+			return ctx.converted(operand, javaObjectType)
+		}
+	}
+	return referenceComparison(expression, ctx.program.canConvertReference, convert)
 }
 
 func referenceComparison(expression *JavaExpression, assignable func(string, string) bool, convert func(*JavaExpression, string) (string, error)) (string, error) {

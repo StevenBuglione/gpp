@@ -57,7 +57,7 @@ func (ctx javaObjectContext) instanceOfBinding(expression *JavaExpression) (stri
 	if source != "null" && !ctx.program.referenceType(source) {
 		return "", fmt.Errorf("unsupported Java reference pattern operand %s", source)
 	}
-	value, err := ctx.expression(expression.Operand)
+	value, err := ctx.referenceTestValue(expression.Operand)
 	if err != nil {
 		return "", err
 	}

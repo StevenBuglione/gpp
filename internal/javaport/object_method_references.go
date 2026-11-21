@@ -11,7 +11,8 @@ func (ctx javaObjectContext) methodReference(expression *JavaExpression) (string
 		return "", err
 	}
 	lambda := &JavaExpression{Kind: "LAMBDA_EXPRESSION", Type: expression.Type}
-	invocation := &JavaExpression{Kind: "METHOD_INVOCATION", Symbol: expression.Symbol, Type: expression.Result}
+	invocation := &JavaExpression{Kind: "METHOD_INVOCATION", Symbol: expression.Symbol, Type: expression.Result,
+		InvocationParameters: expression.InvocationParameters}
 	for index, parameter := range adapter.method.declaration.Parameters {
 		parameter.Name = fmt.Sprintf("referenceOperand%d", index)
 		lambda.Parameters = append(lambda.Parameters, parameter)

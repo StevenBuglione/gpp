@@ -116,8 +116,11 @@ type Occurrence struct {
 	Modifiers                []string         `json:"modifiers,omitempty"`
 	Parameters               []Parameter      `json:"parameters,omitempty"`
 	Result                   string           `json:"result,omitempty"`
+	ErasedResult             string           `json:"erasedResult,omitempty"`
+	ErasedType               string           `json:"erasedType,omitempty"`
 	Thrown                   []string         `json:"thrown,omitempty"`
 	Supertypes               []string         `json:"supertypes,omitempty"`
+	ErasedSupertypes         []string         `json:"erasedSupertypes,omitempty"`
 	PermittedSubclasses      []string         `json:"permittedSubclasses,omitempty"`
 	HasTypeParams            bool             `json:"hasTypeParams,omitempty"`
 	Constant                 *string          `json:"constant,omitempty"`
@@ -202,30 +205,31 @@ type JavaSwitchPattern struct {
 }
 
 type JavaExpression struct {
-	Kind          string             `json:"kind"`
-	Type          string             `json:"type"`
-	Name          string             `json:"name,omitempty"`
-	BindingID     int64              `json:"bindingId,omitempty"`
-	Operand       *JavaExpression    `json:"operand,omitempty"`
-	Target        *JavaExpression    `json:"target,omitempty"`
-	Left          *JavaExpression    `json:"left,omitempty"`
-	Right         *JavaExpression    `json:"right,omitempty"`
-	Condition     *JavaExpression    `json:"condition,omitempty"`
-	WhenTrue      *JavaExpression    `json:"whenTrue,omitempty"`
-	WhenFalse     *JavaExpression    `json:"whenFalse,omitempty"`
-	Literal       string             `json:"literal,omitempty"`
-	UTF16LE       *string            `json:"utf16LE,omitempty"`
-	Symbol        string             `json:"symbol,omitempty"`
-	Receiver      string             `json:"receiver,omitempty"`
-	Static        bool               `json:"static,omitempty"`
-	Arguments     []*JavaExpression  `json:"arguments,omitempty"`
-	Parameters    []Parameter        `json:"parameters,omitempty"`
-	Body          *MethodBody        `json:"body,omitempty"`
-	Result        string             `json:"result,omitempty"`
-	Cases         []JavaSwitchCase   `json:"cases,omitempty"`
-	RecordPattern *JavaSwitchPattern `json:"recordPattern,omitempty"`
-	Line          int64              `json:"line"`
-	Column        int64              `json:"column"`
+	Kind                 string             `json:"kind"`
+	Type                 string             `json:"type"`
+	Name                 string             `json:"name,omitempty"`
+	BindingID            int64              `json:"bindingId,omitempty"`
+	Operand              *JavaExpression    `json:"operand,omitempty"`
+	Target               *JavaExpression    `json:"target,omitempty"`
+	Left                 *JavaExpression    `json:"left,omitempty"`
+	Right                *JavaExpression    `json:"right,omitempty"`
+	Condition            *JavaExpression    `json:"condition,omitempty"`
+	WhenTrue             *JavaExpression    `json:"whenTrue,omitempty"`
+	WhenFalse            *JavaExpression    `json:"whenFalse,omitempty"`
+	Literal              string             `json:"literal,omitempty"`
+	UTF16LE              *string            `json:"utf16LE,omitempty"`
+	Symbol               string             `json:"symbol,omitempty"`
+	Receiver             string             `json:"receiver,omitempty"`
+	Static               bool               `json:"static,omitempty"`
+	Arguments            []*JavaExpression  `json:"arguments,omitempty"`
+	InvocationParameters []string           `json:"invocationParameters,omitempty"`
+	Parameters           []Parameter        `json:"parameters,omitempty"`
+	Body                 *MethodBody        `json:"body,omitempty"`
+	Result               string             `json:"result,omitempty"`
+	Cases                []JavaSwitchCase   `json:"cases,omitempty"`
+	RecordPattern        *JavaSwitchPattern `json:"recordPattern,omitempty"`
+	Line                 int64              `json:"line"`
+	Column               int64              `json:"column"`
 }
 
 // TypeDescription preserves the generic structure that a JVM descriptor erases.
@@ -252,8 +256,9 @@ type TypeParameter struct {
 }
 
 type Parameter struct {
-	Name string `json:"name"`
-	Type string `json:"type"`
+	Name       string `json:"name"`
+	Type       string `json:"type"`
+	ErasedType string `json:"erasedType,omitempty"`
 }
 
 type Annotation struct {
@@ -318,7 +323,9 @@ func Analyze(ctx context.Context, inputs []string, options Options) (Report, err
 	var stderr bytes.Buffer
 	// The compiler's attributed expression types expose javac's constant
 	// values, including the exact UTF-16 text of folded concatenations.
-	command := exec.CommandContext(ctx, launcher, "--add-exports=jdk.compiler/com.sun.tools.javac.code=ALL-UNNAMED", analyzer)
+	command := exec.CommandContext(ctx, launcher,
+		"--add-exports=jdk.compiler/com.sun.tools.javac.code=ALL-UNNAMED",
+		"--add-exports=jdk.compiler/com.sun.tools.javac.tree=ALL-UNNAMED", analyzer)
 	command.Stdin = strings.NewReader(strings.Join(arguments, "\x00"))
 	command.Stderr = &stderr
 	output, err := command.Output()
