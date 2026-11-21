@@ -19,12 +19,13 @@ import (
 var analyzerSource []byte
 
 type Options struct {
-	Java       string
-	Release    int
-	Encoding   string
-	ClassPath  string
-	ModulePath string
-	Preview    bool
+	Java         string
+	Release      int
+	Encoding     string
+	ClassPath    string
+	ModulePath   string
+	Preview      bool
+	MethodBodies bool
 }
 
 type BuildInputs struct {
@@ -125,11 +126,29 @@ type Occurrence struct {
 	ModuleName        string           `json:"moduleName,omitempty"`
 	TypeDescription   *TypeDescription `json:"typeDescription,omitempty"`
 	TypeParameters    []TypeParameter  `json:"typeParameters,omitempty"`
+	Body              *MethodBody      `json:"body,omitempty"`
 	// Start and End are Java compiler offsets in UTF-16 code units.
 	Start  int64 `json:"start"`
 	End    int64 `json:"end"`
 	Line   int64 `json:"line"`
 	Column int64 `json:"column"`
+}
+
+type MethodBody struct {
+	Statements int                  `json:"statements"`
+	Return     *PrimitiveExpression `json:"return,omitempty"`
+}
+
+type PrimitiveExpression struct {
+	Kind    string               `json:"kind"`
+	Type    string               `json:"type"`
+	Name    string               `json:"name,omitempty"`
+	Operand *PrimitiveExpression `json:"operand,omitempty"`
+	Left    *PrimitiveExpression `json:"left,omitempty"`
+	Right   *PrimitiveExpression `json:"right,omitempty"`
+	Literal string               `json:"literal,omitempty"`
+	Line    int64                `json:"line"`
+	Column  int64                `json:"column"`
 }
 
 // TypeDescription preserves the generic structure that a JVM descriptor erases.
@@ -217,7 +236,7 @@ func Analyze(ctx context.Context, inputs []string, options Options) (Report, err
 	// Framing with NUL keeps file paths with whitespace intact and permits
 	// projects whose source paths exceed the OS command-line limit.
 	arguments := append([]string{
-		strconv.Itoa(options.Release), strconv.FormatBool(options.Preview), options.ClassPath, options.ModulePath, options.Encoding,
+		strconv.Itoa(options.Release), strconv.FormatBool(options.Preview), options.ClassPath, options.ModulePath, options.Encoding, strconv.FormatBool(options.MethodBodies),
 	}, sources...)
 	var stderr bytes.Buffer
 	command := exec.CommandContext(ctx, launcher, analyzer)

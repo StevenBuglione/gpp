@@ -1,9 +1,12 @@
+import com.sun.source.tree.BinaryTree;
+import com.sun.source.tree.BlockTree;
 import com.sun.source.tree.ClassTree;
 import com.sun.source.tree.CompilationUnitTree;
 import com.sun.source.tree.ExportsTree;
 import com.sun.source.tree.ExpressionTree;
 import com.sun.source.tree.IdentifierTree;
 import com.sun.source.tree.ImportTree;
+import com.sun.source.tree.LiteralTree;
 import com.sun.source.tree.MemberReferenceTree;
 import com.sun.source.tree.MemberSelectTree;
 import com.sun.source.tree.MethodInvocationTree;
@@ -11,9 +14,12 @@ import com.sun.source.tree.MethodTree;
 import com.sun.source.tree.ModuleTree;
 import com.sun.source.tree.NewClassTree;
 import com.sun.source.tree.OpensTree;
+import com.sun.source.tree.ParenthesizedTree;
 import com.sun.source.tree.ProvidesTree;
 import com.sun.source.tree.RequiresTree;
+import com.sun.source.tree.ReturnTree;
 import com.sun.source.tree.Tree;
+import com.sun.source.tree.TypeCastTree;
 import com.sun.source.tree.UsesTree;
 import com.sun.source.tree.VariableTree;
 import com.sun.source.util.JavacTask;
@@ -60,15 +66,17 @@ class JavaSourceAnalysis {
         final Trees trees;
         final Elements elements;
         final Types types;
+        final boolean includeMethodBodies;
         final List<String> declarations = new ArrayList<>();
         final List<String> calls = new ArrayList<>();
         final TreeMap<String, String> typeReferences = new TreeMap<>();
 
-        Inventory(CompilationUnitTree unit, Trees trees, Elements elements, Types types) {
+        Inventory(CompilationUnitTree unit, Trees trees, Elements elements, Types types, boolean includeMethodBodies) {
             this.unit = unit;
             this.trees = trees;
             this.elements = elements;
             this.types = types;
+            this.includeMethodBodies = includeMethodBodies;
         }
 
         @Override
@@ -81,6 +89,14 @@ class JavaSourceAnalysis {
         public Void visitMethod(MethodTree tree, Void unused) {
             record(tree, declarations);
             return super.visitMethod(tree, unused);
+        }
+
+        @Override
+        public Void visitBlock(BlockTree tree, Void unused) {
+            if (includeMethodBodies && getCurrentPath().getParentPath().getLeaf() instanceof ClassTree) {
+                record(tree, declarations);
+            }
+            return super.visitBlock(tree, unused);
         }
 
         @Override
@@ -177,9 +193,58 @@ class JavaSourceAnalysis {
                 ",\"type\":" + quote(type == null ? "" : type.toString()) +
                 (output == declarations ? declarationAttributes(element) +
                     ",\"typeDescription\":" + typeRecord(type) : "") +
+                (includeMethodBodies && tree instanceof MethodTree method ? methodBodyRecord(path, method) : "") +
                 ",\"start\":" + start + ",\"end\":" + end +
                 ",\"line\":" + unit.getLineMap().getLineNumber(start) +
                 ",\"column\":" + unit.getLineMap().getColumnNumber(start) + "}");
+        }
+
+        private String methodBodyRecord(TreePath path, MethodTree method) {
+            var body = method.getBody();
+            if (body == null) {
+                return "";
+            }
+            var positions = trees.getSourcePositions();
+            // javac can insert an implicit super() call while attributing a constructor.
+            var statements = body.getStatements().stream()
+                .filter(statement -> positions.getEndPosition(unit, statement) != Diagnostic.NOPOS)
+                .toList();
+            String record = ",\"body\":{\"statements\":" + statements.size();
+            if (statements.size() == 1 && statements.get(0) instanceof ReturnTree statement &&
+                    statement.getExpression() != null) {
+                var statementPath = new TreePath(new TreePath(path, body), statement);
+                record += ",\"return\":" + primitiveExpression(new TreePath(statementPath, statement.getExpression()));
+            }
+            return record + "}";
+        }
+
+        private String primitiveExpression(TreePath path) {
+            var tree = path.getLeaf();
+            var type = trees.getTypeMirror(path);
+            long start = trees.getSourcePositions().getStartPosition(unit, tree);
+            String kind = tree.getKind().name();
+            String attributes = ",\"type\":" + quote(type == null ? "" : type.getKind().name().toLowerCase(Locale.ROOT)) +
+                ",\"line\":" + unit.getLineMap().getLineNumber(start) +
+                ",\"column\":" + unit.getLineMap().getColumnNumber(start);
+            if (tree instanceof IdentifierTree identifier) {
+                var element = trees.getElement(path);
+                if (element != null && element.getKind() == ElementKind.PARAMETER) {
+                    attributes += ",\"name\":" + quote(identifier.getName().toString());
+                } else {
+                    kind = "NON_PARAMETER_IDENTIFIER";
+                }
+            } else if (tree instanceof TypeCastTree cast) {
+                attributes += ",\"operand\":" + primitiveExpression(new TreePath(path, cast.getExpression()));
+            } else if (tree instanceof ParenthesizedTree parentheses) {
+                attributes += ",\"operand\":" + primitiveExpression(new TreePath(path, parentheses.getExpression()));
+            } else if (tree instanceof BinaryTree binary) {
+                attributes += ",\"left\":" + primitiveExpression(new TreePath(path, binary.getLeftOperand())) +
+                    ",\"right\":" + primitiveExpression(new TreePath(path, binary.getRightOperand()));
+            } else if (tree instanceof LiteralTree literal && (tree.getKind() == Tree.Kind.INT_LITERAL ||
+                    tree.getKind() == Tree.Kind.LONG_LITERAL)) {
+                attributes += ",\"literal\":" + quote(literal.getValue().toString());
+            }
+            return "{\"kind\":" + quote(kind) + attributes + "}";
         }
 
         private String declarationAttributes(Element element) {
@@ -365,7 +430,8 @@ class JavaSourceAnalysis {
         }
         var diagnostics = new DiagnosticCollector<JavaFileObject>();
         var encoding = arguments[4].isEmpty() ? StandardCharsets.UTF_8 : Charset.forName(arguments[4]);
-        var sources = Arrays.stream(arguments, 5, arguments.length).map(Path::of).toList();
+        boolean includeMethodBodies = Boolean.parseBoolean(arguments[5]);
+        var sources = Arrays.stream(arguments, 6, arguments.length).map(Path::of).toList();
         var files = new ArrayList<String>();
         try (var manager = compiler.getStandardFileManager(diagnostics, Locale.ROOT, encoding)) {
             var inputs = manager.getJavaFileObjectsFromPaths(sources);
@@ -374,7 +440,7 @@ class JavaSourceAnalysis {
             task.analyze();
             var trees = Trees.instance(task);
             for (var unit : units) {
-                var inventory = new Inventory(unit, trees, task.getElements(), task.getTypes());
+                var inventory = new Inventory(unit, trees, task.getElements(), task.getTypes(), includeMethodBodies);
                 inventory.scan(unit, null);
                 files.add("{" + "\"path\":" + quote(filePath(unit.getSourceFile())) +
                     ",\"package\":" + quote(unit.getPackageName() == null ? "" : unit.getPackageName().toString()) +

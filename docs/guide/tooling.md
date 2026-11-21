@@ -129,6 +129,12 @@ Unsupported declarations produce source diagnostics before any output.
 gpp migrate java --emit-gpp --release 17 /path/to/Ordered.java /path/to/PriorityOrdered.java
 ```
 
+The emitter also translates primitive cast methods from public final utility
+classes with private empty constructors. The methods take primitive arguments
+and return a parameter, cast, or shift expression. Generated function names combine
+the Java class and method names. Floating-point narrowing follows Java's
+saturation and NaN rules through the bundled `gpp/java` package.
+
 ## Developing this documentation site
 
 Install the documentation dependencies and start VitePress:

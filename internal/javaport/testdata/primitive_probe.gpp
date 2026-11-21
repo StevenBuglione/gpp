@@ -1,0 +1,24 @@
+package main
+
+import (
+    "bufio"
+    "fmt"
+    "math"
+    "os"
+    "strconv"
+
+    "gpp/java"
+)
+
+func main() {
+    input := bufio.NewScanner(os.Stdin)
+    for input.Scan() {
+        bits := strconv.ParseUint(input.Text(), 16, 64)
+        value := math.Float64frombits(bits)
+        fmt.Printf("%016x %d %d %s\n", bits,
+            java.IntFromDouble(value), java.LongFromDouble(value), java.DoubleString(value))
+    }
+    if err := input.Err(); err != nil {
+        panic(err)
+    }
+}

@@ -1,0 +1,28 @@
+package gpp.java
+
+// Throwable is the Go-facing contract for errors with a Java class identity.
+type Throwable interface {
+    error
+    JavaClassName() string
+}
+
+// RuntimeException identifies exceptions that Java treats as unchecked.
+type RuntimeException interface {
+    Throwable
+    JavaRuntimeException()
+}
+
+// IllegalArgumentException preserves the Java validation error type at Go call sites.
+type IllegalArgumentException struct {
+    Message string
+}
+
+func (exception *IllegalArgumentException) Error() string {
+    return exception.Message
+}
+
+func (exception *IllegalArgumentException) JavaClassName() string {
+    return "java.lang.IllegalArgumentException"
+}
+
+func (exception *IllegalArgumentException) JavaRuntimeException() {}

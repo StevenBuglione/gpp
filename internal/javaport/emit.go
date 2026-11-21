@@ -21,26 +21,25 @@ var primitiveTypes = map[string]string{
 	"double":  "float64",
 }
 
+// EmitGPP translates supported Java declaration and executable forms.
+func EmitGPP(report Report) (string, error) {
+	for _, file := range report.Files {
+		for _, declaration := range file.Declarations {
+			if declaration.Kind == "CLASS" && declaration.Owner == "" {
+				return emitPrimitiveUtilityClasses(report)
+			}
+		}
+	}
+	return EmitInterfaces(report)
+}
+
 // EmitInterfaces lowers the first supported source form: standalone, public
 // Java interfaces with primitive signatures, integer or boolean constants,
 // and same-package marker interfaces.
 func EmitInterfaces(report Report) (string, error) {
-	for _, diagnostic := range report.Diagnostics {
-		if diagnostic.Kind == "ERROR" {
-			return "", fmt.Errorf("%s:%d:%d: %s", diagnostic.Path, diagnostic.Line, diagnostic.Column, diagnostic.Message)
-		}
-	}
-	if len(report.Files) == 0 {
-		return "", fmt.Errorf("no Java interfaces to emit")
-	}
-	packageName := report.Files[0].Package
-	if packageName == "" || packageName == "main" {
-		return "", fmt.Errorf("GPP interface emission requires a named Java package")
-	}
-	for _, part := range strings.Split(packageName, ".") {
-		if !token.IsIdentifier(part) {
-			return "", fmt.Errorf("cannot emit Java package %q as a GPP package", packageName)
-		}
+	packageName, err := emissionPackage(report)
+	if err != nil {
+		return "", err
 	}
 
 	interfaceNames := map[string]string{}
@@ -61,9 +60,6 @@ func EmitInterfaces(report Report) (string, error) {
 	var constants []string
 	names := map[string]bool{}
 	for _, file := range report.Files {
-		if file.Package != packageName {
-			return "", fmt.Errorf("%s: GPP emission currently requires one Java package", file.Path)
-		}
 		if len(file.Calls) > 0 {
 			return "", unsupportedSource(file, file.Calls[0], "calls inside standalone interface declarations")
 		}
@@ -190,4 +186,30 @@ func exportMethodName(name string) string {
 func unsupportedSource(file SourceFile, occurrence Occurrence, problem string) error {
 	return fmt.Errorf("%s:%d:%d: cannot emit %s: %s", file.Path, occurrence.Line,
 		occurrence.Column, occurrence.Symbol, problem)
+}
+
+func emissionPackage(report Report) (string, error) {
+	for _, diagnostic := range report.Diagnostics {
+		if diagnostic.Kind == "ERROR" {
+			return "", fmt.Errorf("%s:%d:%d: %s", diagnostic.Path, diagnostic.Line, diagnostic.Column, diagnostic.Message)
+		}
+	}
+	if len(report.Files) == 0 {
+		return "", fmt.Errorf("no Java sources to emit")
+	}
+	packageName := report.Files[0].Package
+	if packageName == "" || packageName == "main" {
+		return "", fmt.Errorf("GPP emission requires a named Java package")
+	}
+	for _, part := range strings.Split(packageName, ".") {
+		if !token.IsIdentifier(part) {
+			return "", fmt.Errorf("cannot emit Java package %q as a GPP package", packageName)
+		}
+	}
+	for _, file := range report.Files {
+		if file.Package != packageName {
+			return "", fmt.Errorf("%s: GPP emission currently requires one Java package", file.Path)
+		}
+	}
+	return packageName, nil
 }

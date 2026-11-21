@@ -11,6 +11,7 @@ import (
 	"go/types"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -503,12 +504,12 @@ func nativeCatchNamedType(name string, context constructorContext) (types.Type, 
 	if importPath == "" {
 		return nil, false
 	}
-	pkg, err := importNativePackage(importPath)
+	pkg, err := (bundledGoTypeImporter{}).Import(importPath)
 	if err != nil {
 		return nil, false
 	}
 	typeName, ok := pkg.Scope().Lookup(parts[1]).(*types.TypeName)
-	if !ok {
+	if !ok || !typeName.Exported() {
 		return nil, false
 	}
 	return types.Unalias(typeName.Type()), true
@@ -526,12 +527,12 @@ func isCatchErrorValue(name string, context constructorContext) bool {
 	if importPath == "" {
 		return false
 	}
-	pkg, err := importNativePackage(importPath)
+	pkg, err := (bundledGoTypeImporter{}).Import(importPath)
 	if err != nil {
 		return false
 	}
 	variable, ok := pkg.Scope().Lookup(parts[1]).(*types.Var)
-	if !ok {
+	if !ok || !variable.Exported() {
 		return false
 	}
 	errorType := types.Universe.Lookup("error").Type()
@@ -594,10 +595,24 @@ func catchTypeCovers(earlier, later string, context constructorContext) bool {
 	}
 	earlierTarget, earlierOK := context.Targets[earlierBase]
 	laterTarget, laterOK := context.Targets[laterBase]
+	if earlierOK && laterOK {
+		return classInheritsTarget(laterTarget, earlierTarget, context)
+	}
+	earlierNative, earlierOK := nativeCatchNamedType(earlierBase, context)
+	laterNative, laterOK := nativeCatchNamedType(laterBase, context)
 	if !earlierOK || !laterOK {
 		return false
 	}
-	return classInheritsTarget(laterTarget, earlierTarget, context)
+	earlierAlternatives := nativeCatchAlternatives(earlierNative)
+	laterAlternatives := nativeCatchAlternatives(laterNative)
+	for _, laterType := range laterAlternatives {
+		if !slices.ContainsFunc(earlierAlternatives, func(earlierType types.Type) bool {
+			return types.AssignableTo(laterType, earlierType)
+		}) {
+			return false
+		}
+	}
+	return len(laterAlternatives) > 0
 }
 
 // lowerASTTryDirect handles the ordinary Go-compatible subset without ever
@@ -3407,18 +3422,29 @@ func catchTypeAlternatives(typeNode TypeNode, context constructorContext) ([]Typ
 	if !exists {
 		return []TypeNode{typeNode}, nil
 	}
-	errorType := types.Universe.Lookup("error").Type()
 	alternatives := make([]TypeNode, 0, 2)
-	if types.AssignableTo(nativeType, errorType) {
-		alternatives = append(alternatives, typeNode)
-	}
-	if types.AssignableTo(types.NewPointer(nativeType), errorType) {
-		alternatives = append(alternatives, &PointerType{Element: named, SpanValue: named.SpanValue})
+	for _, alternative := range nativeCatchAlternatives(nativeType) {
+		if types.Identical(alternative, nativeType) {
+			alternatives = append(alternatives, typeNode)
+		} else {
+			alternatives = append(alternatives, &PointerType{Element: named, SpanValue: named.SpanValue})
+		}
 	}
 	if len(alternatives) == 0 {
 		return []TypeNode{typeNode}, nil
 	}
 	return alternatives, nil
+}
+
+func nativeCatchAlternatives(nativeType types.Type) []types.Type {
+	errorType := types.Universe.Lookup("error").Type()
+	var alternatives []types.Type
+	for _, candidate := range []types.Type{nativeType, types.NewPointer(nativeType)} {
+		if types.AssignableTo(candidate, errorType) {
+			alternatives = append(alternatives, candidate)
+		}
+	}
+	return alternatives
 }
 
 func identifier(name string) *ast.Ident {

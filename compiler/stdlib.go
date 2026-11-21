@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -30,7 +31,7 @@ func EmbeddedStdlibAvailable() bool {
 // OfficialStdlibPackages returns the compiler-shipped GPP package paths that
 // can be inspected by source-level tooling such as `gpp doc`.
 func OfficialStdlibPackages() []string {
-	return []string{"gpp/container", "gpp/cron", "gpp/encoding", "gpp/exp/http", "gpp/exp/queue", "gpp/http", "gpp/orm", "gpp/sql", "gpp/std", "gpp/test", "gpp/tpl"}
+	return []string{"gpp/container", "gpp/cron", "gpp/encoding", "gpp/exp/http", "gpp/exp/queue", "gpp/http", "gpp/java", "gpp/orm", "gpp/sql", "gpp/std", "gpp/test", "gpp/tpl"}
 }
 
 // LoadOfficialPackage exposes the embedded source model to documentation and
@@ -83,7 +84,7 @@ func appendOfficialStdlib(program *Program) error {
 }
 
 func loadOfficialPackage(importPath string) ([]*File, error) {
-	if importPath != "gpp/container" && importPath != "gpp/cron" && importPath != "gpp/encoding" && importPath != "gpp/exp/http" && importPath != "gpp/exp/queue" && importPath != "gpp/http" && importPath != "gpp/orm" && importPath != "gpp/sql" && importPath != "gpp/std" && importPath != "gpp/test" && importPath != "gpp/tpl" {
+	if !slices.Contains(OfficialStdlibPackages(), importPath) {
 		return nil, fmt.Errorf("official package %q is not bundled with this compiler", importPath)
 	}
 

@@ -34,7 +34,7 @@ func runMigrate(args []string) int {
 	flags.StringVar(&options.Java, "java", "java", "Java launcher from a JDK")
 	analyze := flags.Bool("analyze", false, "emit resolved symbols, calls, and diagnostics as JSON")
 	manifest := flags.String("inputs", "", "Java build inputs manifest")
-	emit := flags.Bool("emit-gpp", false, "emit GPP for supported primitive-only Java interfaces")
+	emit := flags.Bool("emit-gpp", false, "emit GPP for supported Java source")
 	if err := flags.Parse(args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -72,12 +72,13 @@ func runMigrate(args []string) int {
 		fatalf("expected one or more Java source files or directories")
 		return 2
 	}
+	options.MethodBodies = *emit
 	report, err := javaport.Analyze(context.Background(), sources, options)
 	if err != nil {
 		return reportError(err)
 	}
 	if *emit {
-		source, err := javaport.EmitInterfaces(report)
+		source, err := javaport.EmitGPP(report)
 		if err != nil {
 			return reportError(err)
 		}
