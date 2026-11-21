@@ -99,12 +99,13 @@ func (program *javaObjectProgram) finishPackage(source *strings.Builder) (emitte
 	unit := emittedObjectPackage{EmittedPackage: EmittedPackage{Name: program.pkg}}
 	var header strings.Builder
 	fmt.Fprintf(&header, "package %s\n", program.pkg)
-	if program.runtime {
+	if program.runtime || program.primitiveLowering.javaRuntime {
 		if program.pkg == "gpp.java" {
 			return emittedObjectPackage{}, fmt.Errorf("Java runtime import conflicts with source package %q", program.pkg)
 		}
 		header.WriteString("\nimport javart \"gpp/java\"\n")
 	}
+	program.primitiveLowering.emitNativeImports(&header)
 	unit.dependencies = slices.Sorted(maps.Keys(program.imports))
 	for _, dependency := range unit.dependencies {
 		fmt.Fprintf(&header, "\nimport %s %s\n", program.imports[dependency], dependency)

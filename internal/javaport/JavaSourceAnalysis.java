@@ -27,6 +27,7 @@ import com.sun.source.tree.ThrowTree;
 import com.sun.source.tree.Tree;
 import com.sun.source.tree.TryTree;
 import com.sun.source.tree.TypeCastTree;
+import com.sun.source.tree.UnaryTree;
 import com.sun.source.tree.UnionTypeTree;
 import com.sun.source.tree.UsesTree;
 import com.sun.source.tree.VariableTree;
@@ -400,6 +401,8 @@ class JavaSourceAnalysis {
                 attributes += ",\"operand\":" + executableExpression(new TreePath(path, cast.getExpression()));
             } else if (tree instanceof ParenthesizedTree parentheses) {
                 attributes += ",\"operand\":" + executableExpression(new TreePath(path, parentheses.getExpression()));
+            } else if (tree instanceof UnaryTree unary) {
+                attributes += ",\"operand\":" + executableExpression(new TreePath(path, unary.getExpression()));
             } else if (tree instanceof BinaryTree binary) {
                 attributes += ",\"left\":" + executableExpression(new TreePath(path, binary.getLeftOperand())) +
                     ",\"right\":" + executableExpression(new TreePath(path, binary.getRightOperand()));

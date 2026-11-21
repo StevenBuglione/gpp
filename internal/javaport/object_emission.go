@@ -3,7 +3,6 @@ package javaport
 import (
 	"fmt"
 	"maps"
-	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -27,7 +26,7 @@ func (program *javaObjectProgram) emitClass(out *strings.Builder, class *javaObj
 			fmt.Fprintf(out, "\nfunc %s() *javart.String { return %s }\n", class.constantStorageName(field), literal)
 			continue
 		}
-		literal, err := objectPrimitiveLiteral(field.Type, *field.Constant)
+		literal, err := primitiveConstantLiteral(field.Type, *field.Constant)
 		if err != nil {
 			return unsupportedSource(class.file, field, err.Error())
 		}
@@ -330,9 +329,7 @@ func (ctx javaObjectContext) converted(expression *JavaExpression, target string
 	if _, primitive := primitiveTypes[target]; !primitive {
 		return ctx.convertReference(value, expression.Type, target)
 	}
-	converted, usesRuntime, err := convertPrimitive(value, expression.Type, target)
-	ctx.program.runtime = ctx.program.runtime || usesRuntime
-	return converted, err
+	return ctx.program.primitiveLowering.convert(value, expression.Type, target)
 }
 
 func (ctx javaObjectContext) expression(expression *JavaExpression) (string, error) {
@@ -378,28 +375,18 @@ func (ctx javaObjectContext) expression(expression *JavaExpression) (string, err
 		value, err := ctx.expression(expression.Operand)
 		return "(" + value + ")", err
 	case "TYPE_CAST":
-		if primitiveTypes[expression.Type] == "" {
+		if expression.Operand != nil && primitiveTypes[expression.Type] == "" {
 			return ctx.converted(expression.Operand, expression.Type)
 		}
-		value, err := ctx.expression(expression.Operand)
-		if err != nil {
-			return "", err
-		}
-		// A Go conversion of a constant rejects out-of-range values that Java
-		// deliberately narrows. A typed parameter keeps the conversion runtime.
-		from := expression.Operand.Type
-		converted, usesRuntime, err := convertPrimitive("operand", from, expression.Type)
-		if err != nil {
-			return "", err
-		}
-		ctx.program.runtime = ctx.program.runtime || usesRuntime
-		return fmt.Sprintf("func(operand %s) %s { return %s }(%s)", primitiveTypes[from], primitiveTypes[expression.Type], converted, value), nil
+		return ctx.program.primitiveLowering.cast(expression, ctx.expression)
+	case "UNARY_PLUS", "UNARY_MINUS", "BITWISE_COMPLEMENT", "LOGICAL_COMPLEMENT":
+		return ctx.program.primitiveLowering.unary(expression, ctx.expression)
+	case "LEFT_SHIFT", "RIGHT_SHIFT", "UNSIGNED_RIGHT_SHIFT":
+		return ctx.program.primitiveLowering.shift(expression, ctx.expression)
 	case "BOOLEAN_LITERAL", "CHAR_LITERAL", "INT_LITERAL", "LONG_LITERAL", "FLOAT_LITERAL", "DOUBLE_LITERAL":
-		return objectPrimitiveLiteral(expression.Type, expression.Literal)
+		return ctx.program.primitiveLowering.literal(expression.Type, expression.Literal)
 	default:
-		value, usesRuntime, err := emitPrimitiveExpression(expression, ctx.arguments)
-		ctx.program.runtime = ctx.program.runtime || usesRuntime
-		return value, err
+		return ctx.program.primitiveLowering.expression(expression, ctx.arguments)
 	}
 }
 
@@ -408,7 +395,7 @@ func (ctx javaObjectContext) field(expression *JavaExpression) (string, error) {
 		return ctx.program.stringLiteral(expression.UTF16LE)
 	}
 	if expression.Static && expression.Literal != "" && expression.Receiver != "other" {
-		return objectPrimitiveLiteral(expression.Type, expression.Literal)
+		return ctx.program.primitiveLowering.literal(expression.Type, expression.Literal)
 	}
 	field, found := ctx.program.fields[expression.Symbol]
 	if !found || expression.Static || (expression.Receiver != "this" && expression.Receiver != "super") {
@@ -507,24 +494,4 @@ func (program *javaObjectProgram) objectResultType(method *javaObjectMethod) str
 		return ""
 	}
 	return " " + program.objectGoType(method.declaration.Result)
-}
-
-func objectPrimitiveLiteral(javaType, value string) (string, error) {
-	goType := primitiveTypes[javaType]
-	switch javaType {
-	case "boolean":
-		if value == "true" || value == "false" {
-			return "bool(" + value + ")", nil
-		}
-	case "float", "double":
-		number, err := strconv.ParseFloat(value, 64)
-		if err == nil && !math.IsNaN(number) && !math.IsInf(number, 0) && (number != 0 || !math.Signbit(number)) {
-			return goType + "(" + value + ")", nil
-		}
-	case "byte", "short", "char", "int", "long":
-		if integer, err := strconv.ParseInt(value, 10, 64); err == nil {
-			return goType + "(" + strconv.FormatInt(integer, 10) + ")", nil
-		}
-	}
-	return "", fmt.Errorf("unsupported %s constant %q", javaType, value)
 }

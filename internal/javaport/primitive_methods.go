@@ -3,6 +3,7 @@ package javaport
 import (
 	"fmt"
 	"go/token"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -15,7 +16,7 @@ func emitPrimitiveUtilityClasses(report Report) (string, error) {
 	}
 	var methods strings.Builder
 	names := map[string]bool{}
-	usesJavaRuntime := false
+	lowering := primitiveLowering{}
 	for _, file := range report.Files {
 		if len(file.Declarations) == 0 {
 			return "", fmt.Errorf("%s: no Java utility class", file.Path)
@@ -50,12 +51,11 @@ func emitPrimitiveUtilityClasses(report Report) (string, error) {
 			if !token.IsExported(method) || !token.IsIdentifier(name) || names[name] {
 				return "", unsupportedSource(file, member, "overloaded or colliding exported method name")
 			}
-			text, usesRuntime, err := emitPrimitiveMethod(name, member)
+			text, err := lowering.emitMethod(name, member)
 			if err != nil {
 				return "", unsupportedSource(file, member, err.Error())
 			}
 			methods.WriteString(text)
-			usesJavaRuntime = usesJavaRuntime || usesRuntime
 			names[name] = true
 			methodCount++
 		}
@@ -63,22 +63,37 @@ func emitPrimitiveUtilityClasses(report Report) (string, error) {
 			return "", unsupportedSource(file, class, "requires a private empty constructor and public static methods")
 		}
 	}
-	if usesJavaRuntime {
-		if packageName == "gpp.java" {
-			return "", fmt.Errorf("Java runtime import conflicts with source package %q", packageName)
-		}
-		return "package " + packageName + "\n\nimport javart \"gpp/java\"\n" + methods.String(), nil
+	if lowering.javaRuntime && packageName == "gpp.java" {
+		return "", fmt.Errorf("Java runtime import conflicts with source package %q", packageName)
 	}
-	return "package " + packageName + "\n" + methods.String(), nil
+	var source strings.Builder
+	fmt.Fprintf(&source, "package %s\n", packageName)
+	if lowering.javaRuntime {
+		source.WriteString("\nimport javart \"gpp/java\"\n")
+	}
+	lowering.emitNativeImports(&source)
+	source.WriteString(methods.String())
+	return source.String(), nil
 }
 
-func emitPrimitiveMethod(name string, declaration Occurrence) (string, bool, error) {
+type primitiveLowering struct {
+	javaRuntime  bool
+	floatingBits bool
+}
+
+func (lowering primitiveLowering) emitNativeImports(out *strings.Builder) {
+	if lowering.floatingBits {
+		out.WriteString("\nimport javamath \"math\"\n")
+	}
+}
+
+func (lowering *primitiveLowering) emitMethod(name string, declaration Occurrence) (string, error) {
 	result, ok := primitiveTypes[declaration.Result]
 	if !ok || len(declaration.Modifiers) != 2 || !slices.Contains(declaration.Modifiers, "PUBLIC") ||
 		!slices.Contains(declaration.Modifiers, "STATIC") ||
 		len(declaration.Body.Code) != 1 || declaration.Body.Code[0].Kind != "RETURN" ||
 		declaration.Body.Code[0].Expression == nil {
-		return "", false, fmt.Errorf("expected a public static primitive method with one return expression")
+		return "", fmt.Errorf("expected a public static primitive method with one return expression")
 	}
 
 	arguments := map[string]string{}
@@ -86,7 +101,7 @@ func emitPrimitiveMethod(name string, declaration Occurrence) (string, bool, err
 	for index, parameter := range declaration.Parameters {
 		goType, ok := primitiveTypes[parameter.Type]
 		if !ok {
-			return "", false, fmt.Errorf("unsupported parameter type %s", parameter.Type)
+			return "", fmt.Errorf("unsupported parameter type %s", parameter.Type)
 		}
 		generatedName := fmt.Sprintf("parameter%d", index)
 		arguments[parameter.Name] = generatedName
@@ -94,116 +109,224 @@ func emitPrimitiveMethod(name string, declaration Occurrence) (string, bool, err
 	}
 
 	expression := declaration.Body.Code[0].Expression
-	value, usesRuntime, err := emitPrimitiveExpression(expression, arguments)
+	value, err := lowering.expression(expression, arguments)
 	if err != nil {
-		return "", false, err
+		return "", err
 	}
-	value, convertedWithRuntime, err := convertPrimitive(value, expression.Type, declaration.Result)
+	value, err = lowering.convert(value, expression.Type, declaration.Result)
 	if err != nil {
-		return "", false, err
+		return "", err
 	}
 	return fmt.Sprintf("\nfunc %s(%s) %s {\n\treturn %s\n}\n", name,
-		strings.Join(parameters, ", "), result, value), usesRuntime || convertedWithRuntime, nil
+		strings.Join(parameters, ", "), result, value), nil
 }
 
-func emitPrimitiveExpression(expression *JavaExpression, arguments map[string]string) (string, bool, error) {
+func (lowering *primitiveLowering) expression(expression *JavaExpression, arguments map[string]string) (string, error) {
+	evaluate := func(operand *JavaExpression) (string, error) {
+		return lowering.expression(operand, arguments)
+	}
 	switch expression.Kind {
 	case "LEFT_SHIFT", "RIGHT_SHIFT", "UNSIGNED_RIGHT_SHIFT":
-		return emitPrimitiveShift(expression, arguments)
+		return lowering.shift(expression, evaluate)
 	case "IDENTIFIER":
 		if name, ok := arguments[expression.Name]; ok {
-			return name, false, nil
+			return name, nil
 		}
-	case "PARENTHESIZED", "TYPE_CAST":
-		if expression.Operand == nil {
-			break
+	case "PARENTHESIZED":
+		if expression.Operand != nil {
+			value, err := evaluate(expression.Operand)
+			return "(" + value + ")", err
 		}
-		value, usesRuntime, err := emitPrimitiveExpression(expression.Operand, arguments)
-		if err != nil {
-			return "", false, err
+	case "TYPE_CAST":
+		return lowering.cast(expression, evaluate)
+	case "UNARY_PLUS", "UNARY_MINUS", "BITWISE_COMPLEMENT", "LOGICAL_COMPLEMENT":
+		return lowering.unary(expression, evaluate)
+	case "FIELD":
+		if expression.Static && expression.Receiver != "other" && expression.Literal != "" {
+			return lowering.literal(expression.Type, expression.Literal)
 		}
-		if expression.Kind == "PARENTHESIZED" {
-			return "(" + value + ")", usesRuntime, nil
-		}
-		value, convertedWithRuntime, err := convertPrimitive(value, expression.Operand.Type, expression.Type)
-		return value, usesRuntime || convertedWithRuntime, err
+	case "BOOLEAN_LITERAL", "CHAR_LITERAL", "INT_LITERAL", "LONG_LITERAL", "FLOAT_LITERAL", "DOUBLE_LITERAL":
+		return lowering.literal(expression.Type, expression.Literal)
 	}
-	return "", false, fmt.Errorf("unsupported expression %s at %d:%d", expression.Kind, expression.Line, expression.Column)
+	return "", fmt.Errorf("unsupported expression %s at %d:%d", expression.Kind, expression.Line, expression.Column)
 }
 
-func emitPrimitiveShift(expression *JavaExpression, arguments map[string]string) (string, bool, error) {
+func (lowering *primitiveLowering) literal(javaType, value string) (string, error) {
+	if javaType == "float" || javaType == "double" {
+		width := primitiveFloatWidth(javaType)
+		number, err := strconv.ParseFloat(value, width)
+		if err == nil && requiresFloatingBits(number) {
+			// Go constants cannot represent non-finite IEEE values or negative zero.
+			lowering.floatingBits = true
+			if javaType == "float" {
+				bits := math.Float32bits(float32(number))
+				if math.IsNaN(number) {
+					bits = 0x7fc00000
+				}
+				return fmt.Sprintf("javamath.Float32frombits(%d)", bits), nil
+			}
+			bits := math.Float64bits(number)
+			if math.IsNaN(number) {
+				bits = 0x7ff8000000000000
+			}
+			return fmt.Sprintf("javamath.Float64frombits(%d)", bits), nil
+		}
+	}
+	return primitiveConstantLiteral(javaType, value)
+}
+
+func primitiveFloatWidth(javaType string) int {
+	if javaType == "float" {
+		return 32
+	}
+	return 64
+}
+
+func requiresFloatingBits(number float64) bool {
+	return math.IsNaN(number) || math.IsInf(number, 0) || number == 0 && math.Signbit(number)
+}
+
+func primitiveConstantLiteral(javaType, value string) (string, error) {
+	goType := primitiveTypes[javaType]
+	switch javaType {
+	case "boolean":
+		if value == "true" || value == "false" {
+			return "bool(" + value + ")", nil
+		}
+	case "float", "double":
+		width := primitiveFloatWidth(javaType)
+		if number, err := strconv.ParseFloat(value, width); err == nil && !requiresFloatingBits(number) {
+			// GPP's lexer splits signed exponents. Fixed notation also lets
+			// the same value be emitted as a Go const in object declarations.
+			decimal := strconv.FormatFloat(number, 'f', -1, width)
+			if !strings.Contains(decimal, ".") {
+				decimal += ".0"
+			}
+			return goType + "(" + decimal + ")", nil
+		}
+	case "byte", "short", "char", "int", "long":
+		if integer, err := strconv.ParseInt(value, 10, 64); err == nil {
+			return goType + "(" + strconv.FormatInt(integer, 10) + ")", nil
+		}
+	}
+	return "", fmt.Errorf("unsupported %s constant %q", javaType, value)
+}
+
+func (lowering *primitiveLowering) cast(expression *JavaExpression, evaluate func(*JavaExpression) (string, error)) (string, error) {
+	if expression.Operand == nil {
+		return "", fmt.Errorf("missing cast operand at %d:%d", expression.Line, expression.Column)
+	}
+	value, err := evaluate(expression.Operand)
+	if err != nil {
+		return "", err
+	}
+	from, to := expression.Operand.Type, expression.Type
+	converted, err := lowering.convert("operand", from, to)
+	if err != nil {
+		return "", err
+	}
+	if from == to {
+		return value, nil
+	}
+	// A typed value avoids Go's constant overflow diagnostics for legal Java
+	// narrowing conversions. Evaluate the original expression exactly once.
+	return fmt.Sprintf("func(operand %s) %s { return %s }(%s)", primitiveTypes[from], primitiveTypes[to], converted, value), nil
+}
+
+func (lowering *primitiveLowering) unary(expression *JavaExpression, evaluate func(*JavaExpression) (string, error)) (string, error) {
+	if expression.Operand == nil {
+		return "", fmt.Errorf("missing unary operand at %d:%d", expression.Line, expression.Column)
+	}
+	value, err := evaluate(expression.Operand)
+	if err != nil {
+		return "", err
+	}
+	value, err = lowering.convert(value, expression.Operand.Type, expression.Type)
+	if err != nil {
+		return "", err
+	}
+	switch expression.Kind {
+	case "UNARY_PLUS":
+		return "(" + value + ")", nil
+	case "UNARY_MINUS":
+		// Negation uses the promoted Java width and must retain negative zero.
+		goType := primitiveTypes[expression.Type]
+		return fmt.Sprintf("func(operand %s) %s { return -operand }(%s)", goType, goType, value), nil
+	case "BITWISE_COMPLEMENT":
+		return "(^" + value + ")", nil
+	case "LOGICAL_COMPLEMENT":
+		return "(!" + value + ")", nil
+	}
+	return "", fmt.Errorf("unsupported unary operator %s", expression.Kind)
+}
+
+func (lowering *primitiveLowering) shift(expression *JavaExpression, evaluate func(*JavaExpression) (string, error)) (string, error) {
 	if expression.Left == nil || expression.Right == nil {
-		return "", false, fmt.Errorf("missing shift operand at %d:%d", expression.Line, expression.Column)
+		return "", fmt.Errorf("missing shift operand at %d:%d", expression.Line, expression.Column)
 	}
 	// Java promotes the left operand and masks the shift distance to five
 	// bits for int or six bits for long (JLS 15.19).
-	mask, unsigned := uint64(31), "uint32"
+	mask, unsigned := 31, "uint32"
 	switch expression.Type {
 	case "int":
 	case "long":
 		mask, unsigned = 63, "uint64"
 	default:
-		return "", false, fmt.Errorf("unsupported shift result %s", expression.Type)
+		return "", fmt.Errorf("unsupported shift result %s", expression.Type)
 	}
-	left, usesRuntime, err := emitPrimitiveExpression(expression.Left, arguments)
+	left, err := evaluate(expression.Left)
 	if err != nil {
-		return "", false, err
+		return "", err
 	}
-	left, convertedWithRuntime, err := convertPrimitive(left, expression.Left.Type, expression.Type)
+	left, err = lowering.convert(left, expression.Left.Type, expression.Type)
 	if err != nil {
-		return "", false, err
+		return "", err
 	}
-	usesRuntime = usesRuntime || convertedWithRuntime
 
-	var distance string
-	if expression.Right.Kind == "INT_LITERAL" || expression.Right.Kind == "LONG_LITERAL" {
-		literal, err := strconv.ParseInt(expression.Right.Literal, 10, 64)
-		if err != nil {
-			return "", false, fmt.Errorf("invalid shift distance %q", expression.Right.Literal)
-		}
-		distance = strconv.FormatUint(uint64(literal)&mask, 10)
-	} else {
-		right, rightUsesRuntime, err := emitPrimitiveExpression(expression.Right, arguments)
-		if err != nil {
-			return "", false, err
-		}
-		usesRuntime = usesRuntime || rightUsesRuntime
-		distance = fmt.Sprintf("(uint64(%s) & %d)", right, mask)
+	right, err := evaluate(expression.Right)
+	if err != nil {
+		return "", err
 	}
+	distanceType := primitiveTypes[expression.Right.Type]
+	if distanceType == "" {
+		return "", fmt.Errorf("unsupported shift distance type %s", expression.Right.Type)
+	}
+	distance := fmt.Sprintf("(uint64(distance) & %d)", mask)
+	goType := primitiveTypes[expression.Type]
+	var shifted string
 	switch expression.Kind {
 	case "LEFT_SHIFT":
-		return "(" + left + " << " + distance + ")", usesRuntime, nil
+		shifted = "operand << " + distance
 	case "UNSIGNED_RIGHT_SHIFT":
-		return primitiveTypes[expression.Type] + "(" + unsigned + "(" + left + ") >> " + distance + ")", usesRuntime, nil
+		shifted = goType + "(" + unsigned + "(operand) >> " + distance + ")"
 	default:
-		return "(" + left + " >> " + distance + ")", usesRuntime, nil
+		shifted = "operand >> " + distance
 	}
+	return fmt.Sprintf("func(operand %s, distance %s) %s { return %s }(%s, %s)",
+		goType, distanceType, goType, shifted, left, right), nil
 }
 
-func convertPrimitive(value, from, to string) (string, bool, error) {
+func (lowering *primitiveLowering) convert(value, from, to string) (string, error) {
 	_, validSource := primitiveTypes[from]
 	target, validTarget := primitiveTypes[to]
 	if !validSource || !validTarget || (from == "boolean") != (to == "boolean") {
-		return "", false, fmt.Errorf("unsupported primitive conversion from %s to %s", from, to)
+		return "", fmt.Errorf("unsupported primitive conversion from %s to %s", from, to)
 	}
 	if from == to {
-		return value, false, nil
+		return value, nil
 	}
-	if from == "float" || from == "double" {
-		if to == "float" || to == "double" {
-			return target + "(" + value + ")", false, nil
-		}
+	if (from == "float" || from == "double") && to != "float" && to != "double" {
+		lowering.javaRuntime = true
 		if from == "float" {
 			value = "float64(" + value + ")"
 		}
 		if to == "long" {
-			return "javart.LongFromDouble(" + value + ")", true, nil
+			return "javart.LongFromDouble(" + value + ")", nil
 		}
 		value = "javart.IntFromDouble(" + value + ")"
 		if to == "int" {
-			return value, true, nil
+			return value, nil
 		}
-		return target + "(" + value + ")", true, nil
 	}
-	return target + "(" + value + ")", false, nil
+	return target + "(" + value + ")", nil
 }

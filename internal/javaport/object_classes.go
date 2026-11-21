@@ -41,16 +41,17 @@ type javaObjectField struct {
 }
 
 type javaObjectProgram struct {
-	classes  map[string]*javaObjectClass
-	methods  map[string]*javaObjectMethod
-	fields   map[string]javaObjectField
-	layout   []*javaObjectClass
-	pending  map[string]bool
-	exports  map[string]map[string]bool
-	pkg      string
-	facadeOf string
-	imports  map[string]string
-	runtime  bool
+	classes           map[string]*javaObjectClass
+	methods           map[string]*javaObjectMethod
+	fields            map[string]javaObjectField
+	layout            []*javaObjectClass
+	pending           map[string]bool
+	exports           map[string]map[string]bool
+	pkg               string
+	facadeOf          string
+	imports           map[string]string
+	runtime           bool
+	primitiveLowering primitiveLowering
 }
 
 func emitJavaObjects(report Report) (string, error) {
