@@ -784,6 +784,12 @@ Child.class
 
 Effective/inherited views should be computed separately.
 
+Inherited field, method, and parameter annotations use the type and argument
+values resolved in the declaring package. Subclass inspection can cross
+intermediate packages without importing the packages that define the
+annotations. The subclass has independent annotation and parameter containers
+and preserves the original annotation declaration identity.
+
 ---
 
 # Effective Member Sets

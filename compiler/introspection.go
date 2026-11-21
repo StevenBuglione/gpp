@@ -122,6 +122,18 @@ func (annotations GppAnnotations) All(annotation any) []GppAnnotation {
 	return result
 }
 
+// Clone copies metadata containers while retaining declaration and value identity.
+func (annotations GppAnnotations) Clone() GppAnnotations {
+	if annotations == nil { return nil }
+	result := append(GppAnnotations{}, annotations...)
+	for index := range result {
+		if result[index].Args != nil {
+			result[index].Args = append([]any{}, result[index].Args...)
+		}
+	}
+	return result
+}
+
 func (annotations GppAnnotations) find(annotation any) int {
 	for index, value := range annotations {
 		if annotationMatches(value, annotation) { return index }
@@ -158,6 +170,21 @@ type GppMethod struct {
 	Static      bool
 	Annotations GppAnnotations
 	Invoke      func(any, []any) ([]any, error)
+}
+
+// CloneParameters returns an independent snapshot of the declaration's metadata.
+func (method GppMethod) CloneParameters() []GppParameter {
+	if method.Parameters == nil { return nil }
+	parameters := append([]GppParameter{}, method.Parameters...)
+	for index := range parameters {
+		parameter := &parameters[index]
+		parameter.Annotations = parameter.Annotations.Clone()
+		if parameter.Type != nil {
+			value := *parameter.Type
+			parameter.Type = &value
+		}
+	}
+	return parameters
 }
 
 type GppFunction struct {
@@ -413,11 +440,10 @@ func ensureIntrospectionRuntimeImport(body, importPath string) string {
 }
 
 func emitClassDescriptor(out *strings.Builder, class *ClassDecl, classes map[string]*ClassDecl, context constructorContext) error {
-	fields, err := constructorFields(class, classes, nil, map[*ClassDecl]bool{})
+	fields, err := classDescriptorFields(class, classes)
 	if err != nil {
 		return err
 	}
-	fields = filterInaccessibleInheritedFields(class, fields)
 
 	parentNames := classParentNames(class)
 	parentReferences := make([]string, 0, len(parentNames))
@@ -445,38 +471,30 @@ func emitClassDescriptor(out *strings.Builder, class *ClassDecl, classes map[str
 		decodeGOB = fmt.Sprintf("func(data []byte) (any, error) { value := &%s{}; if err := %s(data, value); err != nil { return nil, err }; return value, nil }", class.Name, decoderCall)
 	}
 	fmt.Fprintf(out, "var Gpp%sClass = &GppClass{Name: %q, Package: %q, DecodeGOB: %s, Parents: %s, Annotations: %s, Methods: []GppMethod{\n", class.Name, class.Name, templatePackageScope(context.ModulePath, context.Package), decodeGOB, parents, annotationUsesLiteral(class.Annotations, context))
-	methods, err := effectiveMethodDescriptors(class, classes, map[*ClassDecl]bool{})
+	methods, err := effectiveMethodDescriptors(class, classes, false, map[*ClassDecl]bool{})
 	if err != nil {
 		return err
 	}
+	staticMethods, err := effectiveMethodDescriptors(class, classes, true, map[*ClassDecl]bool{})
+	if err != nil {
+		return err
+	}
+	methods = append(methods, staticMethods...)
 	for _, descriptor := range methods {
-		invoker := "nil"
-		if descriptor.Owner == class.Name && len(descriptor.Method.Annotations) > 0 && len(descriptor.Method.TypeParamsAST) == 0 && !methodHasVariadicParameter(descriptor.Method) {
-			invoker, err = methodInvocationLiteral(descriptor.Method, context)
-			if err != nil {
-				return err
-			}
+		if err := emitClassMethodDescriptor(out, descriptor, class, classes, context); err != nil {
+			return err
 		}
-		fmt.Fprintf(out, "\t{Name: %q, Parameters: %s, Result: %s, Annotations: %s, Invoke: %s},\n", descriptor.Method.Name, methodParametersLiteral(descriptor.Method, context), methodResultLiteral(descriptor.Method), annotationUsesLiteral(descriptor.Method.Annotations, context), invoker)
-	}
-	staticMethods, err := effectiveStaticMethodDescriptors(class, classes, map[*ClassDecl]bool{})
-	if err != nil {
-		return err
-	}
-	for _, descriptor := range staticMethods {
-		fmt.Fprintf(out, "\t{Name: %q, Parameters: %s, Result: %s, Static: true, Annotations: %s},\n", descriptor.Method.Name, methodParametersLiteral(descriptor.Method, context), methodResultLiteral(descriptor.Method), annotationUsesLiteral(descriptor.Method.Annotations, context))
 	}
 	out.WriteString("}, Fields: []GppField{\n")
 	for _, field := range fields {
 		path := append(append([]string(nil), field.Path...), generatedMemberName(field.Name))
 		access := strings.Join(path, ".")
-		owner := field.Owner
-		if owner == "" {
-			owner = class.Name
-		}
-
 		fieldType := field.Type
-		fmt.Fprintf(out, "\t{Name: %q, Owner: nil, Type: &GppType{Name: %q}, Annotations: %s,\n", field.Name, fieldType, annotationUsesLiteral(field.Annotations, context))
+		owner, annotations, err := classFieldMetadata(field, class, classes, context)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "\t{Name: %q, Owner: %s, Type: &GppType{Name: %q}, Annotations: %s,\n", field.Name, owner, fieldType, annotations)
 		fmt.Fprintf(out, "\t\tGet: func(root any) any {\n")
 		fmt.Fprintf(out, "\t\t\tswitch value := root.(type) {\n")
 		fmt.Fprintf(out, "\t\t\tcase *%s:\n\t\t\t\treturn value.%s\n", class.Name, access)
@@ -500,26 +518,14 @@ func emitClassDescriptor(out *strings.Builder, class *ClassDecl, classes map[str
 	out.WriteString("},\n}\n\n")
 	out.WriteString("func init() {\n")
 	for index, field := range fields {
-		owner := field.Owner
-		if owner == "" {
-			owner = class.Name
-		}
-		if reference := classDescriptorReference(owner, classes, context); reference != "" {
-			fmt.Fprintf(out, "\tGpp%sClass.Fields[%d].Owner = %s\n", class.Name, index, reference)
+		if len(field.Path) == 0 {
+			fmt.Fprintf(out, "\tGpp%sClass.Fields[%d].Owner = Gpp%sClass\n", class.Name, index, class.Name)
 		}
 	}
-	methodIndex := 0
-	for _, descriptor := range methods {
-		if reference := classDescriptorReference(descriptor.Owner, classes, context); reference != "" {
-			fmt.Fprintf(out, "\tGpp%sClass.Methods[%d].Owner = %s\n", class.Name, methodIndex, reference)
+	for index, descriptor := range methods {
+		if len(descriptor.Path) == 0 {
+			fmt.Fprintf(out, "\tGpp%sClass.Methods[%d].Owner = Gpp%sClass\n", class.Name, index, class.Name)
 		}
-		methodIndex++
-	}
-	for _, descriptor := range staticMethods {
-		if reference := classDescriptorReference(descriptor.Owner, classes, context); reference != "" {
-			fmt.Fprintf(out, "\tGpp%sClass.Methods[%d].Owner = %s\n", class.Name, methodIndex, reference)
-		}
-		methodIndex++
 	}
 	fmt.Fprintf(out, "\t__gppRegisterClass(Gpp%sClass)\n", class.Name)
 	out.WriteString("}\n\n")
@@ -609,93 +615,156 @@ func filterInaccessibleInheritedFields(class *ClassDecl, fields []constructorFie
 	return accessible
 }
 
-type methodDescriptor struct {
-	Method Method
-	Owner  string
+func classDescriptorFields(class *ClassDecl, classes map[string]*ClassDecl) ([]constructorField, error) {
+	fields, err := constructorFields(class, classes, nil, map[*ClassDecl]bool{})
+	if err != nil {
+		return nil, err
+	}
+	return filterInaccessibleInheritedFields(class, fields), nil
 }
 
-func effectiveMethodDescriptors(class *ClassDecl, classes map[string]*ClassDecl, visiting map[*ClassDecl]bool) ([]methodDescriptor, error) {
+// inheritedClassDescriptor follows the same embedded fields as member
+// access. The immediate parent's descriptor gives access to deeper ancestors
+// without bringing their package names into the inspecting package.
+func inheritedClassDescriptor(class *ClassDecl, path []string, classes map[string]*ClassDecl, context constructorContext) (*ClassDecl, string, error) {
+	var reference string
+	for _, part := range path {
+		index := 0
+		var parent *ClassDecl
+		for _, parentName := range classParentNames(class) {
+			parentReference := classDescriptorReference(parentName, classes, context)
+			if parentReference == "" {
+				continue
+			}
+			if classParentFieldName(parentName) == part {
+				parent = classes[parentName]
+				if reference == "" {
+					reference = parentReference
+				} else {
+					reference += fmt.Sprintf(".Parents[%d]", index)
+				}
+				break
+			}
+			index++
+		}
+		if parent == nil {
+			return nil, "", fmt.Errorf("class %s has no descriptor for embedded parent %s", class.Name, part)
+		}
+		class = parent
+	}
+	return class, reference, nil
+}
+
+func classFieldMetadata(field constructorField, class *ClassDecl, classes map[string]*ClassDecl, context constructorContext) (string, string, error) {
+	if len(field.Path) == 0 {
+		return "nil", annotationUsesLiteral(field.Annotations, context), nil
+	}
+	owner, reference, err := inheritedClassDescriptor(class, field.Path, classes, context)
+	if err != nil {
+		return "", "", err
+	}
+	if len(field.Annotations) == 0 {
+		return reference, "GppAnnotations{}", nil
+	}
+	fields, err := classDescriptorFields(owner, classes)
+	if err != nil {
+		return "", "", err
+	}
+	for index, declared := range fields {
+		if len(declared.Path) == 0 && declared.Name == field.Name {
+			return reference, fmt.Sprintf("%s.Fields[%d].Annotations.Clone()", reference, index), nil
+		}
+	}
+	return "", "", fmt.Errorf("class %s has no declared field descriptor for %s", owner.Name, field.Name)
+}
+
+func emitClassMethodDescriptor(out *strings.Builder, descriptor methodDescriptor, class *ClassDecl, classes map[string]*ClassDecl, context constructorContext) error {
+	method := descriptor.Method
+	var owner, annotations, parameters string
+	invoker := "nil"
+	if len(descriptor.Path) == 0 {
+		annotations = annotationUsesLiteral(method.Annotations, context)
+		parameters = methodParametersLiteral(method, context)
+		if !method.IsStatic && len(method.Annotations) != 0 && len(method.TypeParamsAST) == 0 && !methodHasVariadicParameter(method) {
+			var err error
+			invoker, err = methodInvocationLiteral(method, context)
+			if err != nil {
+				return err
+			}
+		}
+	} else {
+		declaration, reference, err := inheritedClassDescriptor(class, descriptor.Path, classes, context)
+		if err != nil {
+			return err
+		}
+		index := descriptor.Index
+		if method.IsStatic {
+			instanceMethods, err := effectiveMethodDescriptors(declaration, classes, false, map[*ClassDecl]bool{})
+			if err != nil {
+				return err
+			}
+			index += len(instanceMethods)
+		}
+		origin := fmt.Sprintf("%s.Methods[%d]", reference, index)
+		owner = ", Owner: " + reference
+		annotations = origin + ".Annotations.Clone()"
+		parameters = origin + ".CloneParameters()"
+	}
+	fmt.Fprintf(out, "\t{Name: %q, Parameters: %s, Result: %s", method.Name, parameters, methodResultLiteral(method))
+	if method.IsStatic {
+		out.WriteString(", Static: true")
+	}
+	fmt.Fprintf(out, ", Annotations: %s, Invoke: %s%s},\n", annotations, invoker, owner)
+	return nil
+}
+
+type methodDescriptor struct {
+	Method Method
+	Path   []string
+	Index  int
+}
+
+func effectiveMethodDescriptors(class *ClassDecl, classes map[string]*ClassDecl, static bool, visiting map[*ClassDecl]bool) ([]methodDescriptor, error) {
 	if visiting[class] {
 		return nil, fmt.Errorf("inheritance cycle involving class %s", class.Name)
 	}
 	visiting[class] = true
 	defer delete(visiting, class)
 
-	result := []methodDescriptor{}
+	var result []methodDescriptor
+	key := func(method Method) string {
+		if static {
+			return method.Name
+		}
+		return fmt.Sprintf("%s/%d", methodSignatureKey(method), len(method.TypeParamsAST))
+	}
 	seen := map[string]bool{}
 	for _, method := range class.Methods {
-		if method.IsStatic {
-			continue
+		if method.IsStatic == static {
+			result = append(result, methodDescriptor{Method: method, Index: len(result)})
+			seen[key(method)] = true
 		}
-		result = append(result, methodDescriptor{Method: method, Owner: class.Name})
-		arity, err := parameterCount(methodParametersSource(method))
-		if err != nil {
-			return nil, err
-		}
-		seen[method.Name+fmt.Sprintf("/%d", arity)] = true
 	}
 	for _, parentName := range classParentNames(class) {
 		parent, ok := classes[parentName]
 		if !ok {
 			return nil, fmt.Errorf("class %s has unresolved parent %s", class.Name, parentName)
 		}
-		inherited, err := effectiveMethodDescriptors(parent, classes, visiting)
+		inherited, err := effectiveMethodDescriptors(parent, classes, static, visiting)
 		if err != nil {
 			return nil, err
 		}
+		var accepted []string
 		for _, descriptor := range inherited {
-			arity, err := parameterCount(methodParametersSource(descriptor.Method))
-			if err != nil {
-				return nil, err
+			method := descriptor.Method
+			if method.Name != "init" && memberVisibleToSubclass(method.Name) && !seen[key(method)] {
+				descriptor.Path = append([]string{classParentFieldName(parentName)}, descriptor.Path...)
+				result = append(result, descriptor)
+				accepted = append(accepted, key(method))
 			}
-			key := descriptor.Method.Name + fmt.Sprintf("/%d", arity)
-			if seen[key] {
-				continue
-			}
-			if strings.Contains(parentName, ".") && !strings.Contains(descriptor.Owner, ".") {
-				descriptor.Owner = parentName[:strings.Index(parentName, ".")] + "." + descriptor.Owner
-			}
-			result = append(result, descriptor)
-			seen[key] = true
 		}
-	}
-	return result, nil
-}
-
-func effectiveStaticMethodDescriptors(class *ClassDecl, classes map[string]*ClassDecl, visiting map[*ClassDecl]bool) ([]methodDescriptor, error) {
-	if visiting[class] {
-		return nil, fmt.Errorf("inheritance cycle involving class %s", class.Name)
-	}
-	visiting[class] = true
-	defer delete(visiting, class)
-
-	result := []methodDescriptor{}
-	localNames := map[string]bool{}
-	for _, method := range class.Methods {
-		if !method.IsStatic {
-			continue
-		}
-		result = append(result, methodDescriptor{Method: method, Owner: class.Name})
-		localNames[method.Name] = true
-	}
-	for _, parentName := range classParentNames(class) {
-		parent, ok := classes[parentName]
-		if !ok {
-			continue
-		}
-		inherited, err := effectiveStaticMethodDescriptors(parent, classes, visiting)
-		if err != nil {
-			return nil, err
-		}
-		for _, descriptor := range inherited {
-			if localNames[descriptor.Method.Name] {
-				continue
-			}
-			if strings.Contains(parentName, ".") && !strings.Contains(descriptor.Owner, ".") {
-				descriptor.Owner = parentName[:strings.Index(parentName, ".")] + "." + descriptor.Owner
-			}
-			result = append(result, descriptor)
-			localNames[descriptor.Method.Name] = true
+		for _, name := range accepted {
+			seen[name] = true
 		}
 	}
 	return result, nil
