@@ -114,10 +114,7 @@ func (s *server) contextualCompletions(state *fileState, offset int) []Completio
 			return sortedCompletionItems(items)
 		}
 		if className := s.classTypeExpression(state, receiver, offset); className != "" {
-			for _, info := range s.classMembersForType(state, className, "", true) {
-				if !s.classMemberVisibleInCompletion(state, offset, info.Symbol) {
-					continue
-				}
+			for _, info := range s.classQualifiedStaticMembers(state, receiver, "", offset) {
 				add(completionForSymbol(contextualizeMethodForClass(info.Symbol, className)))
 			}
 			return sortedCompletionItems(items)
@@ -139,7 +136,7 @@ func (s *server) contextualCompletions(state *fileState, offset int) []Completio
 				var matched []CompletionItem
 				for _, info := range s.packageSymbols(packageName, packageDir) {
 					if info.Symbol.Parent == memberType && !info.Symbol.StaticField && (info.Symbol.Kind == compiler.DocField || info.Symbol.Kind == compiler.DocMethod || info.Symbol.Kind == compiler.DocExtension || info.Symbol.Kind == compiler.DocValue) {
-						if !s.classMemberVisibleInCompletion(state, offset, info.Symbol) {
+						if !s.classMemberVisibleAt(state, offset, info) {
 							continue
 						}
 						matched = append(matched, completionForSymbol(info.Symbol))
@@ -147,7 +144,7 @@ func (s *server) contextualCompletions(state *fileState, offset int) []Completio
 				}
 				if len(matched) == 0 {
 					for _, info := range s.inheritedMembersForType(packageName, packageDir, memberType, "") {
-						if info.Symbol.StaticField || !s.classMemberVisibleInCompletion(state, offset, info.Symbol) {
+						if info.Symbol.StaticField || !s.classMemberVisibleAt(state, offset, info) {
 							continue
 						}
 						matched = append(matched, completionForSymbol(info.Symbol))
@@ -160,7 +157,7 @@ func (s *server) contextualCompletions(state *fileState, offset int) []Completio
 			if !strings.HasPrefix(strings.TrimSpace(typeName), "[]") {
 				className := s.classTypeForReceiver(state, receiver, offset)
 				for _, info := range s.classMembersForType(state, typeName, "", false) {
-					if !s.classMemberVisibleInCompletion(state, offset, info.Symbol) {
+					if !s.classMemberVisibleAt(state, offset, info) {
 						continue
 					}
 					if className != "" {
@@ -170,7 +167,7 @@ func (s *server) contextualCompletions(state *fileState, offset int) []Completio
 					}
 				}
 				for _, info := range s.classMembersForType(state, typeName, "", true) {
-					if info.Symbol.StaticField || !s.classMemberVisibleInCompletion(state, offset, info.Symbol) {
+					if info.Symbol.StaticField || !s.classMemberVisibleAt(state, offset, info) {
 						continue
 					}
 					if className != "" {
@@ -1028,48 +1025,22 @@ func (s *server) constructorFieldCompletions(state *fileState, offset int) []Com
 	return result
 }
 
-func (s *server) classMemberVisibleInCompletion(state *fileState, offset int, symbol compiler.DocSymbol) bool {
-	if symbol.Exported {
+func (s *server) classMemberVisibleAt(state *fileState, offset int, member symbolInfo) bool {
+	if member.Symbol.Exported {
 		return true
 	}
 	currentClass := enclosingClassName(state, offset)
-	if currentClass == symbol.Parent {
-		return true
-	}
-	if strings.HasPrefix(symbol.Name, "_") {
-		return s.classContextIsSubclassOf(state, currentClass, symbol.Parent, map[string]bool{})
-	}
-	return false
-}
-
-func (s *server) classContextIsSubclassOf(state *fileState, className, parentName string, visiting map[string]bool) bool {
-	if className == "" || parentName == "" || visiting[className] {
+	if currentClass == "" {
 		return false
 	}
-	visiting[className] = true
-	defer delete(visiting, className)
-	for _, symbol := range s.typeSymbolsForName(state, className) {
-		if symbol.Symbol.Kind != compiler.DocClass {
-			continue
-		}
-		file := s.fileForSymbolPath(symbol.Path)
-		if file == nil {
-			continue
-		}
-		for _, declaration := range file.Decls {
-			class, ok := declaration.(*compiler.ClassDecl)
-			if !ok || class.Name != symbol.Symbol.Name {
-				continue
-			}
-			for _, parent := range class.ParentNames() {
-				parentLeaf := parent
-				if dot := strings.LastIndexByte(parentLeaf, '.'); dot >= 0 {
-					parentLeaf = parentLeaf[dot+1:]
-				}
-				if parentLeaf == parentName || s.classContextIsSubclassOf(state, parent, parentName, visiting) {
-					return true
-				}
-			}
+	owner, found := s.classInfoForMember(member)
+	if !found {
+		return false
+	}
+	for _, class := range s.packageSymbols(state.File.Package, filepath.Dir(state.Path)) {
+		if class.Symbol.Kind == compiler.DocClass && class.Symbol.Name == currentClass {
+			return semanticSymbolKey(class) == semanticSymbolKey(owner) ||
+				strings.HasPrefix(member.Symbol.Name, "_") && s.classIsSubtype(class, owner, map[string]bool{})
 		}
 	}
 	return false

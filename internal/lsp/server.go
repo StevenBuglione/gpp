@@ -2689,6 +2689,9 @@ func (s *server) resolveSymbolsAt(uri string, position Position, name string) []
 			}
 		}
 		if receiver, dotOffset, ok := sourceSelectorReceiverAt(state.Source, offset); ok {
+			if s.classTypeExpression(state, receiver, offset) != "" {
+				return s.classQualifiedStaticMembers(state, receiver, name, offset)
+			}
 			for _, info := range s.nativeGoMembersForGPPSelector(state, receiver, offset) {
 				if info.Symbol.Name == name {
 					return []symbolInfo{info}
@@ -2752,10 +2755,9 @@ func (s *server) resolveSymbolsAt(uri string, position Position, name string) []
 				}
 				return result
 			}
-			if className := s.classTypeExpression(state, receiver, offset); className != "" {
-				if classMembers := s.classMembersForType(state, className, name, true); len(classMembers) > 0 {
-					return selectCallArityOverloadAt(state, token.Span.Start, name, classMembers)
-				}
+			if s.classTypeExpression(state, receiver, offset) != "" {
+				members := s.classQualifiedStaticMembers(state, receiver, name, offset)
+				return selectCallArityOverloadAt(state, token.Span.Start, name, members)
 			}
 			receiverType := s.receiverTypeForExpression(state, receiver, state.File.Tokens[index-1].Span.Start, offset)
 			if receiverType == "" {
@@ -2851,8 +2853,8 @@ func (s *server) inheritedMembersForType(packageName, packageDir, typeName, memb
 			if seenClasses[parentKey] {
 				continue
 			}
-			for _, info := range s.workspace.symbols {
-				if info.Symbol.Package != parent.Symbol.Package || info.Symbol.Parent != parent.Symbol.Name || memberName != "" && info.Symbol.Name != memberName {
+			for _, info := range s.packageSymbols(parent.Symbol.Package, filepath.Dir(parent.Path)) {
+				if info.Symbol.Parent != parent.Symbol.Name || memberName != "" && info.Symbol.Name != memberName {
 					continue
 				}
 				memberKey := semanticSymbolKey(info)
@@ -2862,6 +2864,25 @@ func (s *server) inheritedMembersForType(packageName, packageDir, typeName, memb
 				}
 			}
 			queue = append(queue, parent)
+		}
+	}
+	return result
+}
+
+func (s *server) classQualifiedStaticMembers(state *fileState, receiver, memberName string, offset int) []symbolInfo {
+	var result []symbolInfo
+	seenFields := map[string]bool{}
+	// Keep the qualified receiver so same-named classes in other packages
+	// cannot contribute members. A directly declared field hides inherited ones.
+	for _, info := range s.classMembersForType(state, receiver, memberName, true) {
+		if info.Symbol.StaticField {
+			if seenFields[info.Symbol.Name] {
+				continue
+			}
+			seenFields[info.Symbol.Name] = true
+		}
+		if s.classMemberVisibleAt(state, offset, info) {
+			result = append(result, info)
 		}
 	}
 	return result
@@ -2892,8 +2913,8 @@ func (s *server) classMembersForType(state *fileState, typeName, memberName stri
 		}
 		classDir := filepath.Clean(filepath.Dir(class.Path))
 		beforeDirect := len(result)
-		for _, info := range s.workspace.symbols {
-			if info.Symbol.Package == class.Symbol.Package && info.Symbol.Parent == class.Symbol.Name && filepath.Clean(filepath.Dir(info.Path)) == classDir {
+		for _, info := range s.packageSymbols(class.Symbol.Package, classDir) {
+			if info.Symbol.Parent == class.Symbol.Name {
 				add(info)
 			}
 		}
@@ -2901,6 +2922,9 @@ func (s *server) classMembersForType(state *fileState, typeName, memberName stri
 			continue
 		}
 		for _, info := range s.inheritedMembersForType(class.Symbol.Package, classDir, class.Symbol.Name, memberName) {
+			if static && !info.Symbol.Exported && !strings.HasPrefix(info.Symbol.Name, "_") {
+				continue
+			}
 			add(info)
 		}
 	}
