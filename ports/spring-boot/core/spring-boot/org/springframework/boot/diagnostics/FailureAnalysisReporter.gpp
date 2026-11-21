@@ -1,0 +1,11 @@
+/*
+ * Copyright 2012-present the original author or authors.
+ */
+
+// Ported from FailureAnalysisReporter in Spring Boot 4.2.0.
+package org.springframework.boot.diagnostics
+
+// FailureAnalysisReporter reports the given analysis to the user.
+type FailureAnalysisReporter interface {
+    Report(analysis *FailureAnalysis)
+}

@@ -19,6 +19,24 @@ var officialStdlib embed.FS
 
 const javaRuntimePackage = "gpp/java"
 
+func javaExceptionRuntimeImport(options CompileOptions, model *SemanticModel) string {
+	if options.JavaRuntimeImport != "" {
+		return options.JavaRuntimeImport
+	}
+	if options.ModulePath == "" || model == nil {
+		return ""
+	}
+	logical, _ := officialLogicalPackage(javaRuntimePackage)
+	if symbols := model.Packages[logical]; symbols != nil {
+		for _, file := range symbols.Files {
+			if file.OfficialPackage == javaRuntimePackage {
+				return options.ModulePath + "/" + javaRuntimePackage
+			}
+		}
+	}
+	return ""
+}
+
 func validateJavaRuntimeImport(options CompileOptions) error {
 	importPath := options.JavaRuntimeImport
 	if importPath == "" {

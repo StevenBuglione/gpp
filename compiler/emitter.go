@@ -50,6 +50,7 @@ func EmitWithOptions(file *File, options CompileOptions) ([]byte, error) {
 	context.Annotations = model.Packages[file.Package].Annotations
 	context.Package = file.Package
 	context.JavaRuntimeImport = options.JavaRuntimeImport
+	context.Exceptions.RuntimeImport = javaExceptionRuntimeImport(options, nil)
 	context.AtExit = atExit
 	context.Development = options.Development
 	context.Templates = model.Packages[file.Package].Templates
@@ -400,7 +401,15 @@ func emitFile(file *File, context constructorContext) ([]byte, error) {
 		}
 	}
 	if context.Exceptions != nil && !context.Exceptions.RuntimeEmitted {
-		declarationsPrefix += exceptionRuntimeSourceMarker + "\n" + exceptionRuntimeDefinitions()
+		var raise, unwrap string
+		if file.OfficialPackage == javaRuntimePackage {
+			raise, unwrap = "Raise", "UnwrapRaised"
+		} else if importPath := context.Exceptions.RuntimeImport; importPath != "" {
+			alias := generatedImportAlias(body, "__gppJavaRuntime")
+			body = insertAfterImports(body, fmt.Sprintf("import %s %q\n", alias, importPath))
+			raise, unwrap = alias+".Raise", alias+".UnwrapRaised"
+		}
+		declarationsPrefix += exceptionRuntimeSourceMarker + "\n" + exceptionRuntimeDefinitions(raise, unwrap)
 		context.Exceptions.RuntimeEmitted = true
 	}
 	if needsFmtImport {

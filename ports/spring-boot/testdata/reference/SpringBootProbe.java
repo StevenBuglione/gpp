@@ -9,6 +9,8 @@ import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.SpringBootConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.diagnostics.FailureAnalysis;
+import org.springframework.boot.diagnostics.FailureAnalysisReporter;
+import org.springframework.boot.diagnostics.FailureAnalyzer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.core.annotation.AliasFor;
 import org.springframework.core.annotation.AnnotatedElementUtils;
@@ -140,6 +142,11 @@ public class SpringBootProbe {
         var unnamed = new FailureAnalysis(null, null, null);
         require(unnamed.getDescription() == "" && unnamed.getAction() == null && unnamed.getCause() == null,
             "failure-analysis null inputs");
+        FailureAnalyzer analyzer = failure -> failure == cause ? analysis : null;
+        FailureAnalysisReporter reporter = reported -> require(reported == analysis && reported.getCause() == cause,
+            "failure analysis callbacks retain identity");
+        reporter.report(analyzer.analyze(cause));
+        require(analyzer.analyze(new NullPointerException()) == null, "failure analyzer may return null");
 
         var application = new SpringApplication(Configuration.class);
         application.setWebApplicationType(WebApplicationType.NONE);

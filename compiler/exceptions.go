@@ -19,12 +19,21 @@ import (
 
 type exceptionContext struct {
 	RuntimeEmitted bool
+	RuntimeImport  string
 }
 
 const exceptionRuntimeSourceMarker = "// __gppGeneratedExceptionRuntime__"
 
-func exceptionRuntimeDefinitions() string {
-	return `type __gppThrownError struct {
+func exceptionRuntimeDefinitions(raise, unwrap string) string {
+	var thrownDefinitions string
+	if raise != "" {
+		thrownDefinitions = fmt.Sprintf(`func __gppThrow(err error) { %s(err) }
+
+func __gppUnwrapThrown(recovered any) (error, bool) { return %s(recovered) }
+
+`, raise, unwrap)
+	} else {
+		thrownDefinitions = `type __gppThrownError struct {
 	err error
 }
 
@@ -32,14 +41,21 @@ func (thrown __gppThrownError) GppThrownError() error {
 	return thrown.err
 }
 
-type __gppExceptionReturn struct {
-	values []any
-}
-
 func __gppThrow(err error) {
 	if err != nil {
 		panic(__gppThrownError{err: err})
 	}
+}
+
+func __gppUnwrapThrown(recovered any) (error, bool) {
+	thrown, ok := recovered.(__gppThrownError)
+	return thrown.err, ok
+}
+
+`
+	}
+	return thrownDefinitions + `type __gppExceptionReturn struct {
+	values []any
 }
 
 func __gppRun(block func()) {
@@ -49,7 +65,7 @@ func __gppRun(block func()) {
 func __gppCoalesce[T any](left func() T, fallback func() T) (result T) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			if _, ok := recovered.(__gppThrownError); ok {
+			if _, ok := __gppUnwrapThrown(recovered); ok {
 				result = fallback()
 				return
 			}
@@ -62,7 +78,7 @@ func __gppCoalesce[T any](left func() T, fallback func() T) (result T) {
 func __gppCoalesce2[A any, B any](left func() (A, B), fallback func() (A, B)) (first A, second B) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			if _, ok := recovered.(__gppThrownError); ok {
+			if _, ok := __gppUnwrapThrown(recovered); ok {
 				first, second = fallback()
 				return
 			}
@@ -75,7 +91,7 @@ func __gppCoalesce2[A any, B any](left func() (A, B), fallback func() (A, B)) (f
 func __gppCoalesce3[A any, B any, C any](left func() (A, B, C), fallback func() (A, B, C)) (first A, second B, third C) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			if _, ok := recovered.(__gppThrownError); ok {
+			if _, ok := __gppUnwrapThrown(recovered); ok {
 				first, second, third = fallback()
 				return
 			}
@@ -1890,7 +1906,7 @@ func lowerExceptionResultBoundaryNode(body *ast.BlockStmt, fields []exceptionRes
 		thrown := ast.NewIdent(nextExceptionName(used, "__gppBoundaryThrown"))
 		isThrown := ast.NewIdent(nextExceptionName(used, "__gppBoundaryIsThrown"))
 		thrownBody := []ast.Stmt{
-			&ast.AssignStmt{Lhs: []ast.Expr{thrown, isThrown}, Tok: token.DEFINE, Rhs: []ast.Expr{&ast.TypeAssertExpr{X: recovered, Type: ast.NewIdent("__gppThrownError")}}},
+			&ast.AssignStmt{Lhs: []ast.Expr{thrown, isThrown}, Tok: token.DEFINE, Rhs: []ast.Expr{call(ast.NewIdent("__gppUnwrapThrown"), recovered)}},
 			&ast.IfStmt{Cond: &ast.UnaryExpr{Op: token.NOT, X: isThrown}, Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ExprStmt{X: call(ast.NewIdent("panic"), recovered)}}}},
 		}
 		for index, field := range fields[:len(fields)-1] {
@@ -1900,7 +1916,7 @@ func lowerExceptionResultBoundaryNode(body *ast.BlockStmt, fields []exceptionRes
 				&ast.AssignStmt{Lhs: []ast.Expr{ast.NewIdent(field.name)}, Tok: token.ASSIGN, Rhs: []ast.Expr{zero}},
 			)
 		}
-		thrownBody = append(thrownBody, &ast.AssignStmt{Lhs: []ast.Expr{ast.NewIdent(fields[len(fields)-1].name)}, Tok: token.ASSIGN, Rhs: []ast.Expr{selector(thrown, "err")}})
+		thrownBody = append(thrownBody, &ast.AssignStmt{Lhs: []ast.Expr{ast.NewIdent(fields[len(fields)-1].name)}, Tok: token.ASSIGN, Rhs: []ast.Expr{thrown}})
 		deferStatements = append(deferStatements, &ast.IfStmt{Cond: &ast.BinaryExpr{X: recovered, Op: token.NEQ, Y: ast.NewIdent("nil")}, Body: &ast.BlockStmt{List: append([]ast.Stmt{
 			&ast.AssignStmt{Lhs: []ast.Expr{returned, isReturned}, Tok: token.DEFINE, Rhs: []ast.Expr{&ast.TypeAssertExpr{X: recovered, Type: ast.NewIdent("__gppExceptionReturn")}}},
 			&ast.IfStmt{Cond: isReturned, Body: &ast.BlockStmt{List: returnBody}},
@@ -3130,10 +3146,9 @@ func lowerTryASTNode(tryBlock *ast.BlockStmt, clauses []catchClause, finallyBloc
 	}
 
 	recovered := identifier("__gppRecovered")
-	thrown := identifier("__gppThrown")
+	thrownError := identifier("__gppThrown")
 	isThrown := identifier("__gppIsThrown")
 	handled := identifier("__gppHandled")
-	thrownError := selector(thrown, "err")
 
 	catchIf := &ast.IfStmt{
 		Cond: &ast.BinaryExpr{X: thrownError, Op: token.NEQ, Y: identifier("nil")},
@@ -3149,12 +3164,9 @@ func lowerTryASTNode(tryBlock *ast.BlockStmt, clauses []catchClause, finallyBloc
 			Cond: &ast.BinaryExpr{X: recovered, Op: token.NEQ, Y: identifier("nil")},
 			Body: &ast.BlockStmt{List: []ast.Stmt{
 				&ast.AssignStmt{
-					Lhs: []ast.Expr{thrown, isThrown},
+					Lhs: []ast.Expr{thrownError, isThrown},
 					Tok: token.DEFINE,
-					Rhs: []ast.Expr{&ast.TypeAssertExpr{
-						X:    recovered,
-						Type: identifier("__gppThrownError"),
-					}},
+					Rhs: []ast.Expr{call(identifier("__gppUnwrapThrown"), recovered)},
 				},
 				&ast.IfStmt{
 					Cond: &ast.UnaryExpr{Op: token.NOT, X: isThrown},
@@ -4928,9 +4940,9 @@ func exceptionBoundaryOpening(fields []exceptionResultField, recoverName, thrown
 	out.WriteString(thrownName)
 	out.WriteString(", ")
 	out.WriteString(okName)
-	out.WriteString(" := ")
+	out.WriteString(" := __gppUnwrapThrown(")
 	out.WriteString(recoverName)
-	out.WriteString(".(__gppThrownError)\n")
+	out.WriteString(")\n")
 	out.WriteString("if !")
 	out.WriteString(okName)
 	out.WriteString(" { panic(")
@@ -4951,7 +4963,7 @@ func exceptionBoundaryOpening(fields []exceptionResultField, recoverName, thrown
 	out.WriteString(fields[len(fields)-1].name)
 	out.WriteString(" = ")
 	out.WriteString(thrownName)
-	out.WriteString(".err\n")
+	out.WriteByte('\n')
 	out.WriteString("}\n")
 	out.WriteString("}()\n")
 	return out.String()

@@ -9,6 +9,8 @@ development against an unreleased version.
 The native `spring-boot` diagnostics port uses the Java runtime provided by
 the generated Framework module. Its Go test passes a Framework JDBC name and
 typed cause through Boot and checks that the original references come back.
+An ordinary Go implementation can satisfy the `FailureAnalyzer` and
+`FailureAnalysisReporter` interfaces.
 Run it with the output of `gpp compile` for the Framework `spring-core` and
 `spring-jdbc` directories.
 

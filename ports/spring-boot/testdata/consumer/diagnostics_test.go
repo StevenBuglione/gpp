@@ -30,4 +30,34 @@ func TestFailureAnalysisSharesFrameworkJavaRuntime(t *testing.T) {
 	if unnamed.GetDescription() != java.InternStringLiteral("") || unnamed.GetAction() != nil || unnamed.GetCause() != nil {
 		t.Fatal("Boot did not use the Framework's interned empty String and preserve nullable inputs")
 	}
+
+	var analyzer diagnostics.FailureAnalyzer = diagnosticAnalyzer(func(failure java.Throwable) *diagnostics.FailureAnalysis {
+		if failure != cause {
+			return nil
+		}
+		return analysis
+	})
+	reports := 0
+	var reporter diagnostics.FailureAnalysisReporter = diagnosticReporter(func(report *diagnostics.FailureAnalysis) {
+		reports++
+		if report != analysis || report.GetCause() != cause {
+			t.Fatal("native Go reporter lost the original analysis or cause")
+		}
+	})
+	reporter.Report(analyzer.Analyze(cause))
+	if reports != 1 || analyzer.Analyze(&java.NullPointerException{}) != nil {
+		t.Fatal("native Go analyzer must support a nullable analysis result")
+	}
+}
+
+type diagnosticAnalyzer func(java.Throwable) *diagnostics.FailureAnalysis
+
+func (analyzer diagnosticAnalyzer) Analyze(failure java.Throwable) *diagnostics.FailureAnalysis {
+	return analyzer(failure)
+}
+
+type diagnosticReporter func(*diagnostics.FailureAnalysis)
+
+func (reporter diagnosticReporter) Report(analysis *diagnostics.FailureAnalysis) {
+	reporter(analysis)
 }

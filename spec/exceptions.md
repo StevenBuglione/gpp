@@ -739,6 +739,12 @@ panic(__gppThrownError{
 
 The exact representation is implementation-defined.
 
+Generated modules that select the same `gpp/java` runtime share its private
+exception wrapper. A `throw` or a promoted error can reach a `catch` or a Go
+error boundary in another module using that runtime. Go code can opt into
+propagation with `java.Raise(err)`. Built-in Go `panic` retains its original
+value and behavior.
+
 ---
 
 # Catch Lowering

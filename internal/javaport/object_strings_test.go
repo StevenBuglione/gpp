@@ -88,27 +88,79 @@ class Probe {
 		gppFiles = append(gppFiles, gpp)
 	}
 	observer := filepath.Join(root, "observer.gpp")
-	writeTestFile(t, observer, `package reference.text
-import "gpp/java"
+	writeTestFile(t, observer, `package reference.observer
+import (
+    "gpp/java"
+    "example.com/java-strings/reference/text"
+)
 
-func CodeUnitFromGo(text *Text, index int32) (int32, error) {
+func CodeUnitFromGo(value *text.Text, index int32) (int32, error) {
     try {
-        return text.GetCodeUnit(index), nil
+        return value.GetCodeUnit(index), nil
     } catch java.RuntimeException failure {
         return int32(0), failure
     }
 }
+
+func CodeUnitWithCleanup(value *text.Text, index int32, cleanup func()) (int32, error) {
+    try {
+        return value.GetCodeUnit(index), nil
+    } finally {
+        cleanup()
+    }
+}
+
+func readCodeUnit(value *text.Text, index int32) int32 {
+    return value.GetCodeUnit(index)
+}
+
+func CodeUnitOrFallback(value *text.Text, index int32) int32 {
+    return readCodeUnit(value, index) ?? -1
+}
+
+func RethrowCallback(callback func()) {
+    try {
+        callback()
+    } catch java.RuntimeException failure {
+        throw failure
+    }
+}
+
+func ForwardCallback(callback func()) error {
+    try {
+        RethrowCallback(callback)
+    } catch java.Throwable failure {
+        return failure
+    }
+    return nil
+}
 `)
 	output := filepath.Join(root, "generated")
-	if err := compiler.CompileFilesWithOptions(append(gppFiles, observer), output,
+	if err := compiler.CompileFilesWithOptions(gppFiles, output,
 		compiler.CompileOptions{ModulePath: "example.com/java-strings"}); err != nil {
 		t.Fatalf("compile translated strings: %v", err)
 	}
-	writeTestFile(t, filepath.Join(output, "main.go"), `package main
+	observerOutput := filepath.Join(root, "observer")
+	if err := compiler.CompileFilesWithOptions([]string{observer}, observerOutput, compiler.CompileOptions{
+		ModulePath: "example.com/java-observer", JavaRuntimeImport: "example.com/java-strings/gpp/java",
+	}); err != nil {
+		t.Fatalf("compile observer against the shared Java exception runtime: %v", err)
+	}
+	consumer := filepath.Join(root, "consumer")
+	if err := os.Mkdir(consumer, 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(consumer, "go.mod"), "module example.com/java-consumer\n\ngo 1.27\n")
+	workspace := filepath.Join(root, "go.work")
+	writeTestFile(t, workspace, "go 1.27\n\nuse (\n\t./generated\n\t./observer\n\t./consumer\n)\n")
+	t.Setenv("GOWORK", workspace)
+	t.Setenv("GOPROXY", "off")
+	writeTestFile(t, filepath.Join(consumer, "main.go"), `package main
 import (
     "errors"
     "fmt"
     "slices"
+    "example.com/java-observer/reference/observer"
     "example.com/java-strings/gpp/java"
     "example.com/java-strings/reference/other"
     "example.com/java-strings/reference/text"
@@ -135,15 +187,34 @@ func main() {
         sample.GetCodeUnit(1), sample.GetCodeUnit(2), sample.GetCodeUnit(3), sample.GetHash())
     reportFailure(sample, 4)
     reportFailure(literals, 0)
+
+    cleanups := 0
+    _, err := observer.CodeUnitWithCleanup(literals, 0, func() { cleanups++ })
+    var nullFailure *java.NullPointerException
+    if cleanups != 1 || !errors.As(err, &nullFailure) { panic("lost cleanup or original error type at the Go boundary") }
+    if observer.CodeUnitOrFallback(sample, 0) != 65 || observer.CodeUnitOrFallback(literals, 0) != -1 {
+        panic("cross-module String errors did not reach coalescing")
+    }
+    original := &java.IllegalArgumentException{Message: "round trip"}
+    if err := observer.ForwardCallback(func() { java.Raise(original) }); err != original { panic("rethrow replaced the original exception") }
+    native := disguisedPanic{original}
+    if recovered := recoverNative(native); recovered != native { panic("ordinary Go panic was converted into an exception") }
 }
 func reportFailure(value *text.Text, index int32) {
-    _, err := text.CodeUnitFromGo(value, index)
+    _, err := observer.CodeUnitFromGo(value, index)
     var javaError java.RuntimeException
     if !errors.As(err, &javaError) { panic(fmt.Sprintf("expected typed exception, got %v", err)) }
     fmt.Println(javaError.JavaClassName())
 }
+type disguisedPanic struct { error }
+func (value disguisedPanic) GppThrownError() error { return value.error }
+func recoverNative(value any) (recovered any) {
+    defer func() { recovered = recover() }()
+    _ = observer.ForwardCallback(func() { panic(value) })
+    return nil
+}
 `)
-	got := runObjectTestCommand(t, output, "go", "run", "-buildvcs=false", ".")
+	got := runObjectTestCommand(t, consumer, "go", "run", "-buildvcs=false", ".")
 	if got != want || !strings.Contains(want, "4 0041 d834 dd1e d800") {
 		t.Fatalf("Go and JDK String behavior diverged\nGo:\n%s\nJava:\n%s", got, want)
 	}

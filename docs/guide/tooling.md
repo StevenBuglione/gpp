@@ -153,6 +153,8 @@ module with its bundled `gpp/java` and point each consumer at that Go package.
 Use the same GPP version for the provider and consumers, then resolve the
 provider through ordinary Go module requirements or a local Go workspace.
 Use one runtime binding throughout each generated module.
+Modules sharing this runtime can catch each other's thrown errors. Go callers
+can receive the original error through a GPP API with a trailing `error` result.
 
 ```bash
 gpp compile -java-runtime-import example.com/provider/gpp/java ./consumer

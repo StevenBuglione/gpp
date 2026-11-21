@@ -490,7 +490,7 @@ func emitPackageFiles(files []*File, outputDir string, options CompileOptions, m
 	records := newRecordContext()
 	introspection := newIntrospectionContext(model.Packages[packageName].Classes)
 	introspection.Enabled = usesIntrospection
-	exceptions := &exceptionContext{}
+	exceptions := &exceptionContext{RuntimeImport: javaExceptionRuntimeImport(options, model)}
 	ternary := &ternaryContext{}
 	preludeEmitted := false
 	output := generatedPackageOutput{Fingerprint: fingerprint, Files: make(map[string]string, len(files))}
@@ -575,6 +575,7 @@ func emitPackageFiles(files []*File, outputDir string, options CompileOptions, m
 }
 
 func generatedPackageFingerprints(program *Program, model *SemanticModel, options CompileOptions, atExit, usesIntrospection bool) map[string]string {
+	exceptionRuntime := javaExceptionRuntimeImport(options, model)
 	filesByPackage := map[string][]*File{}
 	for _, file := range program.Files {
 		filesByPackage[file.Package] = append(filesByPackage[file.Package], file)
@@ -582,7 +583,7 @@ func generatedPackageFingerprints(program *Program, model *SemanticModel, option
 	localFingerprints := make(map[string]string, len(filesByPackage))
 	for packageName, files := range filesByPackage {
 		h := sha256.New()
-		writePackageHashPart(h, "package-fingerprint-version=7")
+		writePackageHashPart(h, "package-fingerprint-version=8")
 		writePackageHashPart(h, "package="+packageName)
 		for _, file := range files {
 			writePackageHashPart(h, "source-path="+file.SourcePath)
@@ -630,6 +631,7 @@ func generatedPackageFingerprints(program *Program, model *SemanticModel, option
 		h := sha256.New()
 		writePackageHashPart(h, "module="+options.ModulePath)
 		writePackageHashPart(h, "java-runtime-import="+options.JavaRuntimeImport)
+		writePackageHashPart(h, "exception-runtime-import="+exceptionRuntime)
 		writePackageHashPart(h, "project-root="+options.ProjectRoot)
 		writePackageHashPart(h, fmt.Sprintf("development=%t", options.Development))
 		writePackageHashPart(h, fmt.Sprintf("no-prelude=%t", options.NoPrelude))

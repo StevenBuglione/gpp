@@ -318,7 +318,8 @@ func TestLowerTryUsesGoASTWrapper(t *testing.T) {
 	for _, fragment := range []string{
 		"__gppRun(func()",
 		"__gppRecovered := recover()",
-		"switch __gppCaught := __gppThrown.err.(type)",
+		"__gppThrown, __gppIsThrown := __gppUnwrapThrown(__gppRecovered)",
+		"switch __gppCaught := __gppThrown.(type)",
 		"defer func()",
 	} {
 		if !strings.Contains(generated, fragment) {

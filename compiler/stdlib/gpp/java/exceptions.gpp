@@ -2,6 +2,28 @@ package gpp.java
 
 import "fmt"
 
+// raisedException is private so ordinary Go panic values and structurally
+// similar types do not become catchable errors.
+type raisedException struct {
+    cause error
+}
+
+func (raised raisedException) GppThrownError() error { return raised.cause }
+
+// Raise propagates a non-nil error through translated Java and GPP frames
+// using this runtime, including frames in other Go modules.
+func Raise(cause error) {
+    if cause != nil {
+        panic(raisedException{cause: cause})
+    }
+}
+
+// UnwrapRaised recognizes only exceptions raised by this runtime.
+func UnwrapRaised(recovered any) (error, bool) {
+    raised, ok := recovered.(raisedException)
+    return raised.cause, ok
+}
+
 // Throwable is the Go-facing contract for errors with a Java class identity.
 type Throwable interface {
     error

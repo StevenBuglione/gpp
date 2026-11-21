@@ -1,0 +1,13 @@
+/*
+ * Copyright 2012-present the original author or authors.
+ */
+
+// Ported from FailureAnalyzer in Spring Boot 4.2.0.
+package org.springframework.boot.diagnostics
+
+import "gpp/java"
+
+// FailureAnalyzer describes the given failure or returns nil when no analysis is possible.
+type FailureAnalyzer interface {
+    Analyze(failure java.Throwable) *FailureAnalysis
+}

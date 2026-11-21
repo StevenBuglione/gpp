@@ -43,7 +43,11 @@ func main() { fmt.Println(java.DoubleString(1.0)) }
 	binary := filepath.Join(root, "app")
 	build := []string{"build", source, "-module", applicationModule, "-output", output, "-o", binary}
 	for index, want := range []string{"first", "second"} {
-		writeFile(filepath.Join(provider, "runtime.go"), fmt.Sprintf("package canonical\nfunc DoubleString(float64) string { return %q }\n", want))
+		writeFile(filepath.Join(provider, "runtime.go"), fmt.Sprintf(`package canonical
+func Raise(err error) { if err != nil { panic(err) } }
+func UnwrapRaised(any) (error, bool) { return nil, false }
+func DoubleString(float64) string { return %q }
+`, want))
 		args := append(append([]string(nil), build...), "-java-runtime-import", providerModule)
 		if index == 1 {
 			args = append(append([]string(nil), build...), "--java-runtime-import="+providerModule)
