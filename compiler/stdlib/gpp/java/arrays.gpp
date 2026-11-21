@@ -177,8 +177,17 @@ func (arrayType ArrayType) acceptsComponent(value any) bool {
 }
 
 func ArrayInstanceOf(value any, target ArrayType) bool {
+    _, ok := MatchArray(value, target)
+    return ok
+}
+
+// MatchArray checks the Java descriptor, including component covariance.
+func MatchArray(value any, target ArrayType) (*Array, bool) {
     array, ok := value.(*Array)
-    return ok && array != nil && array.arrayType.assignableTo(target)
+    if !ok || array == nil || !array.arrayType.assignableTo(target) {
+        return nil, false
+    }
+    return array, true
 }
 
 func CastArray(value any, target ArrayType) *Array {

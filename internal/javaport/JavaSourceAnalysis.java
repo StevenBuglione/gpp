@@ -2,6 +2,7 @@ import com.sun.source.tree.ArrayAccessTree;
 import com.sun.source.tree.AssertTree;
 import com.sun.source.tree.AssignmentTree;
 import com.sun.source.tree.BinaryTree;
+import com.sun.source.tree.BindingPatternTree;
 import com.sun.source.tree.BlockTree;
 import com.sun.source.tree.BreakTree;
 import com.sun.source.tree.CaseTree;
@@ -423,6 +424,12 @@ class JavaSourceAnalysis {
                 ",\"column\":" + unit.getLineMap().getColumnNumber(start);
         }
 
+        private long bindingId(Element element) {
+            var declaration = element == null ? null : trees.getTree(element);
+            return declaration == null ? 0 :
+                trees.getSourcePositions().getStartPosition(unit, declaration) + 1;
+        }
+
         private String executableExpression(TreePath path) {
             var tree = path.getLeaf();
             var type = trees.getTypeMirror(path);
@@ -438,6 +445,9 @@ class JavaSourceAnalysis {
                 } else if (element != null && element.getKind() == ElementKind.EXCEPTION_PARAMETER) {
                     kind = "CATCH_PARAMETER";
                     attributes += ",\"name\":" + quote(identifier.getName().toString());
+                } else if (element != null && element.getKind() == ElementKind.BINDING_VARIABLE) {
+                    kind = "BINDING_VARIABLE";
+                    attributes += ",\"bindingId\":" + bindingId(element);
                 } else if (element != null && (element.getKind() == ElementKind.LOCAL_VARIABLE ||
                         element.getKind() == ElementKind.RESOURCE_VARIABLE)) {
                     kind = "LOCAL_VARIABLE";
@@ -506,6 +516,17 @@ class JavaSourceAnalysis {
                     ",\"right\":" + executableExpression(new TreePath(path, assignment.getExpression()));
             } else if (tree instanceof TypeCastTree cast) {
                 attributes += ",\"operand\":" + executableExpression(new TreePath(path, cast.getExpression()));
+            } else if (tree instanceof InstanceOfTree test && test.getPattern() instanceof BindingPatternTree pattern) {
+                var variable = pattern.getVariable();
+                var binding = trees.getElement(new TreePath(new TreePath(path, pattern), variable));
+                var testedType = trees.getTypeMirror(new TreePath(TreePath.getPath(path, variable), variable.getType()));
+                kind = "INSTANCE_OF_BINDING";
+                attributes += ",\"operand\":" + executableExpression(new TreePath(path, test.getExpression())) +
+                    ",\"target\":{\"kind\":\"TYPE\",\"type\":" + quote(expressionType(testedType)) + "}" +
+                    ",\"bindingId\":" + bindingId(binding);
+                if (variable.getName().length() == 0 || variable.getName().contentEquals("_")) {
+                    kind = "INSTANCE_OF";
+                }
             } else if (tree instanceof InstanceOfTree test && test.getPattern() == null) {
                 var testedType = trees.getTypeMirror(new TreePath(path, test.getType()));
                 attributes += ",\"operand\":" + executableExpression(new TreePath(path, test.getExpression())) +

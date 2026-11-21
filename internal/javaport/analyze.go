@@ -191,6 +191,7 @@ type JavaExpression struct {
 	Kind      string            `json:"kind"`
 	Type      string            `json:"type"`
 	Name      string            `json:"name,omitempty"`
+	BindingID int64             `json:"bindingId,omitempty"`
 	Operand   *JavaExpression   `json:"operand,omitempty"`
 	Target    *JavaExpression   `json:"target,omitempty"`
 	Left      *JavaExpression   `json:"left,omitempty"`

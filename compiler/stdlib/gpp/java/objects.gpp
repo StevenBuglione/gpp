@@ -40,8 +40,13 @@ func CastReference[T any](value any) T {
 
 // InstanceOf implements a Java reference type test. Null never matches.
 func InstanceOf[T any](value any) bool {
-    _, ok := referenceView[T](CanonicalReference(value))
+    _, ok := MatchReference[T](value)
     return ok
+}
+
+// MatchReference supplies the nominal view used by a reference type pattern.
+func MatchReference[T any](value any) (T, bool) {
+    return referenceView[T](NormalizeReference(CanonicalReference(value)))
 }
 
 func interfaceView[T any](value any, javaInterface string) (T, bool) {
@@ -78,6 +83,11 @@ func CastInterface[T any](value any, javaInterface string) T {
 }
 
 func InstanceOfInterface[T any](value any, javaInterface string) bool {
-    _, ok := interfaceView[T](CanonicalReference(value), javaInterface)
+    _, ok := MatchInterface[T](value, javaInterface)
     return ok
+}
+
+// MatchInterface retains Java interface membership when binding a pattern.
+func MatchInterface[T any](value any, javaInterface string) (T, bool) {
+    return interfaceView[T](NormalizeReference(CanonicalReference(value)), javaInterface)
 }

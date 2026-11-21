@@ -163,7 +163,7 @@ func (ctx javaObjectContext) mutationTarget(target *JavaExpression) (string, err
 	switch target.Kind {
 	case "PARENTHESIZED":
 		return ctx.mutationTarget(target.Operand)
-	case "IDENTIFIER", "LOCAL_VARIABLE", "CATCH_PARAMETER":
+	case "IDENTIFIER", "LOCAL_VARIABLE", "CATCH_PARAMETER", "BINDING_VARIABLE":
 		return ctx.expression(target)
 	}
 	return "", fmt.Errorf("unsupported Java mutation target %s", target.Kind)

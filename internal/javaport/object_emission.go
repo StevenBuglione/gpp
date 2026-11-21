@@ -77,21 +77,24 @@ func (program *javaObjectProgram) emitClass(out *strings.Builder, class *javaObj
 	ctx := javaObjectContext{program: program, class: class, controlID: new(int)}
 	if len(class.initializers) > 0 {
 		fmt.Fprintf(out, "\nfunc (this *%s) javaInitFields() {\n", name)
+		var body strings.Builder
+		initializerContext := ctx.patternScope()
 		for _, initializer := range class.initializers {
 			if initializer.Kind == "BLOCK" {
-				out.WriteString("\t{\n")
-				if err := ctx.emitStatements(out, initializer.Body, "void"); err != nil {
+				body.WriteString("\t{\n")
+				if err := initializerContext.emitStatements(&body, initializer.Body, "void"); err != nil {
 					return unsupportedSource(class.file, initializer, err.Error())
 				}
-				out.WriteString("\t}\n")
+				body.WriteString("\t}\n")
 			} else {
-				value, err := ctx.converted(initializer.Initializer, initializer.Type)
+				value, err := initializerContext.converted(initializer.Initializer, initializer.Type)
 				if err != nil {
 					return unsupportedSource(class.file, initializer, err.Error())
 				}
-				fmt.Fprintf(out, "\tthis.javaField%s = %s\n", initializer.Name, value)
+				fmt.Fprintf(&body, "\tthis.javaField%s = %s\n", initializer.Name, value)
 			}
 		}
+		initializerContext.writePatternBody(out, &body)
 		out.WriteString("}\n")
 	}
 	for _, constructor := range class.constructors {
@@ -129,6 +132,7 @@ type javaObjectContext struct {
 	control   *javaControlTarget
 	controlID *int
 	yield     *javaYieldTarget
+	patterns  map[int64]string
 }
 
 func (ctx javaObjectContext) emitConstructor(out *strings.Builder, method *javaObjectMethod) error {
@@ -184,6 +188,8 @@ func (ctx javaObjectContext) emitConstructor(out *strings.Builder, method *javaO
 	if declaration.Body.containsTry() {
 		ctx.emitJavaReturnBoundary(out, "void")
 	}
+	ctx = ctx.patternScope()
+	var body strings.Builder
 	if call.Receiver != "super" || call.Symbol != "java.lang.Object#<init>()" || ctx.class.parent != nil {
 		callee := ctx.program.methods[call.Symbol]
 		expected := ctx.class
@@ -202,14 +208,15 @@ func (ctx javaObjectContext) emitConstructor(out *strings.Builder, method *javaO
 		if callee.class.file.Package != ctx.class.file.Package {
 			calleeName = callee.bridgeName("Init")
 		}
-		fmt.Fprintf(out, "\t%s.%s(%s)\n", receiver, calleeName, values)
+		fmt.Fprintf(&body, "\t%s.%s(%s)\n", receiver, calleeName, values)
 	}
 	if call.Receiver == "super" && len(ctx.class.initializers) > 0 {
-		out.WriteString("\tthis.javaInitFields()\n")
+		body.WriteString("\tthis.javaInitFields()\n")
 	}
-	if err := ctx.emitStatements(out, declaration.Body, "void"); err != nil {
+	if err := ctx.emitStatements(&body, declaration.Body, "void"); err != nil {
 		return err
 	}
+	ctx.writePatternBody(out, &body)
 	out.WriteString("}\n")
 	return nil
 }
@@ -237,7 +244,7 @@ func (ctx javaObjectContext) emitMethod(out *strings.Builder, method *javaObject
 	if method.defaultMethod != nil {
 		fmt.Fprintf(out, "\t%s%s\n", returnKeyword(result), ctx.defaultCall(method.defaultMethod, "this", arguments))
 	} else {
-		if err := ctx.emitStatements(out, declaration.Body, declaration.Result); err != nil {
+		if err := ctx.emitPatternStatements(out, declaration.Body, declaration.Result); err != nil {
 			return err
 		}
 		if declaration.Result != "void" && (hasTry || declaration.Body.containsStatement(needsJavaControlFlowTerminal)) {
@@ -399,6 +406,8 @@ func (ctx javaObjectContext) expression(expression *JavaExpression) (string, err
 			return name, nil
 		}
 		return "", fmt.Errorf("cannot use Java local %s", expression.Name)
+	case "BINDING_VARIABLE":
+		return ctx.patternSlot(expression.BindingID, expression.Type)
 	case "CATCH_PARAMETER":
 		if name, found := ctx.caught[expression.Name]; found {
 			return name, nil
@@ -444,6 +453,8 @@ func (ctx javaObjectContext) expression(expression *JavaExpression) (string, err
 		return ctx.cast(expression)
 	case "INSTANCE_OF":
 		return ctx.instanceOf(expression)
+	case "INSTANCE_OF_BINDING":
+		return ctx.instanceOfBinding(expression)
 	case "SWITCH_EXPRESSION":
 		return ctx.switchExpression(expression)
 	case "ASSIGNMENT":

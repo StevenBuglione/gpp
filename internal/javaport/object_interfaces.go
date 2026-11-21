@@ -363,7 +363,7 @@ func (program *javaObjectProgram) emitInterfaceDefault(out *strings.Builder, met
 	if hasTry {
 		ctx.emitJavaReturnBoundary(out, resultType)
 	}
-	if err := ctx.emitStatements(out, declaration.Body, resultType); err != nil {
+	if err := ctx.emitPatternStatements(out, declaration.Body, resultType); err != nil {
 		return err
 	}
 	if resultType != "void" && (hasTry || declaration.Body.containsStatement(needsJavaControlFlowTerminal)) {
