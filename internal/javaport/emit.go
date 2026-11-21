@@ -32,7 +32,7 @@ func EmitGPP(report Report) (string, error) {
 func usesObjectEmitter(files []SourceFile) bool {
 	for _, file := range files {
 		for _, declaration := range file.Declarations {
-			if declaration.Owner == "" && declaration.Kind == "INTERFACE" {
+			if declaration.Owner == "" && (declaration.Kind == "INTERFACE" || declaration.Kind == "RECORD") {
 				return true
 			}
 			if declaration.Kind == "BLOCK" && declaration.StaticInitializer ||

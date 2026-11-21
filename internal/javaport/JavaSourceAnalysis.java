@@ -262,6 +262,17 @@ class JavaSourceAnalysis {
             var statements = body.getStatements();
             var bodyPath = new TreePath(path, body);
             String invocation = "";
+            if (method.getReturnType() == null && path.getParentPath().getLeaf().getKind() == Tree.Kind.RECORD) {
+                long start = positions.getStartPosition(unit, method);
+                // javac reuses record-header parameter positions in a compact constructor.
+                boolean compact = start != Diagnostic.NOPOS && method.getParameters().stream().anyMatch(parameter -> {
+                    long parameterStart = positions.getStartPosition(unit, parameter);
+                    return parameterStart != Diagnostic.NOPOS && parameterStart < start;
+                });
+                if (compact) {
+                    invocation += ",\"compactRecordConstructor\":true";
+                }
+            }
             // Keep javac's implicit super() as well as explicit this(...) or super(...).
             if (!statements.isEmpty() && method.getReturnType() == null &&
                     statements.get(0) instanceof ExpressionStatementTree statement &&
@@ -269,7 +280,7 @@ class JavaSourceAnalysis {
                     call.getMethodSelect() instanceof IdentifierTree selector &&
                     (selector.getName().contentEquals("this") || selector.getName().contentEquals("super"))) {
                 var callPath = new TreePath(new TreePath(bodyPath, statement), call);
-                invocation = ",\"constructorCall\":" + executableExpression(callPath);
+                invocation += ",\"constructorCall\":" + executableExpression(callPath);
                 statements = statements.subList(1, statements.size());
             }
             var explicit = statements.stream()
@@ -626,11 +637,21 @@ class JavaSourceAnalysis {
                 if (method.getDefaultValue() != null) {
                     result += ",\"annotationDefault\":" + annotationValue(method.getDefaultValue());
                 }
+                if (method.isVarArgs() && enclosing.getKind() == ElementKind.RECORD) {
+                    result += ",\"variableArity\":true";
+                }
                 return result + ",\"result\":" + quote(method.getReturnType().toString()) +
                     ",\"parameters\":[" + parameters + "],\"thrown\":[" + thrown + "]" +
                     ",\"hasTypeParams\":" + !method.getTypeParameters().isEmpty();
             }
             if (element instanceof TypeElement type) {
+                if (type.getKind() == ElementKind.RECORD) {
+                    var components = type.getRecordComponents().stream().map(component ->
+                        "{\"name\":" + quote(component.getSimpleName().toString()) +
+                        ",\"type\":" + quote(component.asType().toString()) + "}")
+                        .collect(Collectors.joining(","));
+                    result += ",\"recordComponents\":[" + components + "]";
+                }
                 var supertypes = types.directSupertypes(type.asType()).stream()
                     .map(parent -> parent.toString()).filter(parent -> !parent.equals("java.lang.Object"))
                     .map(JavaSourceAnalysis::quote).collect(Collectors.joining(","));

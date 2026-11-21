@@ -41,6 +41,7 @@ type javaObjectMethod struct {
 	overridden       bool
 	crossPackageInit bool
 	defaultMethod    *javaInterfaceMethod
+	recordImplicit   bool
 }
 
 type javaObjectField struct {
@@ -102,7 +103,7 @@ func prepareJavaObjects(files []SourceFile) (*javaObjectProgram, error) {
 				}
 				continue
 			}
-			if declaration.Kind != "CLASS" {
+			if declaration.Kind != "CLASS" && declaration.Kind != "RECORD" {
 				continue
 			}
 			if !token.IsExported(declaration.Name) || !token.IsIdentifier(declaration.Name) ||
@@ -121,7 +122,7 @@ func prepareJavaObjects(files []SourceFile) (*javaObjectProgram, error) {
 	}
 	for _, file := range files {
 		for _, declaration := range file.Declarations {
-			if (declaration.Kind == "CLASS" || declaration.Kind == "INTERFACE") && declaration.Owner == "" {
+			if (declaration.Kind == "CLASS" || declaration.Kind == "INTERFACE" || declaration.Kind == "RECORD") && declaration.Owner == "" {
 				continue
 			}
 			owner := declaration.Owner
@@ -146,6 +147,13 @@ func prepareJavaObjects(files []SourceFile) (*javaObjectProgram, error) {
 	for _, iface := range program.interfaceLayout {
 		if err := program.layoutInterface(iface); err != nil {
 			return nil, err
+		}
+	}
+	for _, class := range classes {
+		if class.declaration.Kind == "RECORD" {
+			if err := program.completeRecord(class); err != nil {
+				return nil, unsupportedSource(class.file, class.declaration, err.Error())
+			}
 		}
 	}
 	for _, class := range classes {
@@ -245,6 +253,9 @@ func (program *javaObjectProgram) addMethod(class *javaObjectClass, declaration 
 	}
 	method := &javaObjectMethod{declaration: declaration, class: class, public: slices.Contains(declaration.Modifiers, "PUBLIC")}
 	if declaration.Name == "<init>" {
+		if class.declaration.Kind == "RECORD" && declaration.VariableArity {
+			return fmt.Errorf("variable-arity record constructors require Java varargs lowering")
+		}
 		suffix := constructorSuffix(declaration.Parameters)
 		method.goName = "New" + class.declaration.Name + suffix
 		method.internal = "javaInit" + suffix
@@ -305,6 +316,9 @@ func (program *javaObjectProgram) layoutClass(class *javaObjectClass) error {
 	}
 	class.interfaces = map[string]*javaInterface{}
 	for _, supertype := range declaration.Supertypes {
+		if declaration.Kind == "RECORD" && supertype == javaRecordType {
+			continue
+		}
 		if supertype == javaAutoCloseable {
 			class.closeable = true
 			continue
@@ -351,6 +365,9 @@ func (program *javaObjectProgram) layoutClass(class *javaObjectClass) error {
 	}
 	if class.closeable && class.virtual["GppAutoCloseable"] != nil {
 		return unsupportedSource(class.file, declaration, "Go AutoCloseable marker collides with method GppAutoCloseable")
+	}
+	if declaration.Kind == "RECORD" && class.virtual["GppJavaRecord"] != nil {
+		return unsupportedSource(class.file, declaration, "Go record marker collides with method GppJavaRecord")
 	}
 	for _, method := range []string{"GppJavaBindOwner", "GppJavaOwner", "GppJavaCanonicalObject", "GppJavaReferenceView", javaImplementsBridge} {
 		if class.virtual[method] != nil {

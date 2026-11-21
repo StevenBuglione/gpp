@@ -108,31 +108,34 @@ type ModuleDirective struct {
 }
 
 type Occurrence struct {
-	Kind              string           `json:"kind"`
-	Symbol            string           `json:"symbol"`
-	Type              string           `json:"type"`
-	Owner             string           `json:"owner,omitempty"`
-	Name              string           `json:"name,omitempty"`
-	Modifiers         []string         `json:"modifiers,omitempty"`
-	Parameters        []Parameter      `json:"parameters,omitempty"`
-	Result            string           `json:"result,omitempty"`
-	Thrown            []string         `json:"thrown,omitempty"`
-	Supertypes        []string         `json:"supertypes,omitempty"`
-	HasTypeParams     bool             `json:"hasTypeParams,omitempty"`
-	Constant          *string          `json:"constant,omitempty"`
-	ConstantUTF16LE   *string          `json:"constantUtf16LE,omitempty"`
-	AnnotationCount   int              `json:"annotationCount,omitempty"`
-	Annotations       []Annotation     `json:"annotations,omitempty"`
-	AnnotationDefault *AnnotationValue `json:"annotationDefault,omitempty"`
-	ModuleName        string           `json:"moduleName,omitempty"`
-	TypeDescription   *TypeDescription `json:"typeDescription,omitempty"`
-	TypeParameters    []TypeParameter  `json:"typeParameters,omitempty"`
-	Body              *MethodBody      `json:"body,omitempty"`
-	Initializer       *JavaExpression  `json:"initializer,omitempty"`
-	InitializerOwner  string           `json:"initializerOwner,omitempty"`
-	StaticInitializer bool             `json:"staticInitializer,omitempty"`
-	ConstructorCall   *JavaExpression  `json:"constructorCall,omitempty"`
-	Synthetic         bool             `json:"synthetic,omitempty"`
+	Kind                     string           `json:"kind"`
+	Symbol                   string           `json:"symbol"`
+	Type                     string           `json:"type"`
+	Owner                    string           `json:"owner,omitempty"`
+	Name                     string           `json:"name,omitempty"`
+	Modifiers                []string         `json:"modifiers,omitempty"`
+	Parameters               []Parameter      `json:"parameters,omitempty"`
+	Result                   string           `json:"result,omitempty"`
+	Thrown                   []string         `json:"thrown,omitempty"`
+	Supertypes               []string         `json:"supertypes,omitempty"`
+	HasTypeParams            bool             `json:"hasTypeParams,omitempty"`
+	Constant                 *string          `json:"constant,omitempty"`
+	ConstantUTF16LE          *string          `json:"constantUtf16LE,omitempty"`
+	AnnotationCount          int              `json:"annotationCount,omitempty"`
+	Annotations              []Annotation     `json:"annotations,omitempty"`
+	AnnotationDefault        *AnnotationValue `json:"annotationDefault,omitempty"`
+	ModuleName               string           `json:"moduleName,omitempty"`
+	TypeDescription          *TypeDescription `json:"typeDescription,omitempty"`
+	TypeParameters           []TypeParameter  `json:"typeParameters,omitempty"`
+	Body                     *MethodBody      `json:"body,omitempty"`
+	Initializer              *JavaExpression  `json:"initializer,omitempty"`
+	InitializerOwner         string           `json:"initializerOwner,omitempty"`
+	StaticInitializer        bool             `json:"staticInitializer,omitempty"`
+	ConstructorCall          *JavaExpression  `json:"constructorCall,omitempty"`
+	RecordComponents         []Parameter      `json:"recordComponents,omitempty"`
+	CompactRecordConstructor bool             `json:"compactRecordConstructor,omitempty"`
+	VariableArity            bool             `json:"variableArity,omitempty"`
+	Synthetic                bool             `json:"synthetic,omitempty"`
 	// Start and End are Java compiler offsets in UTF-16 code units.
 	Start  int64 `json:"start"`
 	End    int64 `json:"end"`

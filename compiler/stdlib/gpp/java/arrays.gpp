@@ -4,6 +4,7 @@ import (
     "fmt"
     "reflect"
     "slices"
+    "sync/atomic"
 )
 
 // ArrayType records the runtime array type, including the component's actual
@@ -88,6 +89,21 @@ type Array struct {
     arrayType ArrayType
     length int32
     elements any
+    identity atomic.Uint32
+}
+
+var nextArrayIdentity atomic.Uint32
+
+func (array *Array) identityHash() uint32 {
+    if identity := array.identity.Load(); identity != 0 {
+        return identity
+    }
+    identity := nextArrayIdentity.Add(1)
+    if identity == 0 {
+        identity = nextArrayIdentity.Add(1)
+    }
+    array.identity.CompareAndSwap(0, identity)
+    return array.identity.Load()
 }
 
 // NewArray allocates the specified leading dimensions of an array of T.

@@ -124,12 +124,16 @@ func (program *javaObjectProgram) canConvertReference(source, target string) boo
 		return target == javaObjectType || targetRank != 0
 	}
 	if target == javaObjectType {
-		return program.classes[source] != nil || program.interfaces[source] != nil || source == javaAutoCloseable || javaCatchTypes[source] != ""
+		return program.classes[source] != nil || program.interfaces[source] != nil || source == javaAutoCloseable ||
+			source == javaRecordType || javaCatchTypes[source] != ""
 	}
 	if iface := program.interfaces[source]; iface != nil {
 		return iface.supers[target] != nil || (target == javaAutoCloseable && iface.closeable)
 	}
 	if class := program.classes[source]; class != nil {
+		if class.declaration.Kind == "RECORD" && target == javaRecordType {
+			return true
+		}
 		if class.interfaces[target] != nil {
 			return true
 		}
@@ -160,6 +164,10 @@ func (ctx javaObjectContext) convertReference(value, source, target string) (str
 	}
 	if source == "null" {
 		return "(" + ctx.program.objectGoType(target) + ")(" + value + ")", nil
+	}
+	if target == javaRecordType {
+		ctx.program.runtime = true
+		return "javart.NormalizeReference[javart.Record](" + value + ")", nil
 	}
 	if iface := ctx.program.interfaces[target]; iface != nil {
 		return ctx.interfaceReferenceCall("CastInterface", iface, value), nil

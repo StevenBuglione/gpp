@@ -1,0 +1,145 @@
+package gpp.java
+
+import (
+    "math"
+    "reflect"
+    "strconv"
+    "strings"
+)
+
+// Record is the Go-facing view of java.lang.Record.
+type Record interface {
+    GppJavaRecord()
+    Equals(any) bool
+    HashCode() int32
+    ToString() *String
+}
+
+func recordFloatBits(value float32) uint32 {
+    if math.IsNaN(float64(value)) {
+        return 0x7fc00000
+    }
+    return math.Float32bits(value)
+}
+
+func recordDoubleBits(value float64) uint64 {
+    if math.IsNaN(value) {
+        return 0x7ff8000000000000
+    }
+    return math.Float64bits(value)
+}
+
+func recordUnbox(value any) any {
+    switch boxed := value.(type) {
+    case *Boolean:
+        return boxed.value
+    case *Byte:
+        return boxed.value
+    case *Short:
+        return boxed.value
+    case *Character:
+        return boxed.value
+    case *Integer:
+        return boxed.value
+    case *Long:
+        return boxed.value
+    case *Float:
+        return boxed.value
+    case *Double:
+        return boxed.value
+    default:
+        return value
+    }
+}
+
+func RecordComponentEqual(left, right any) bool {
+    left = CanonicalReference(left)
+    right = CanonicalReference(right)
+    if left == nil {
+        return right == nil
+    }
+    if custom, ok := left.(interface{ Equals(any) bool }); ok {
+        return custom.Equals(right)
+    }
+    right = recordUnbox(right)
+    switch value := recordUnbox(left).(type) {
+    case float32:
+        other, ok := right.(float32)
+        return ok && recordFloatBits(value) == recordFloatBits(other)
+    case float64:
+        other, ok := right.(float64)
+        return ok && recordDoubleBits(value) == recordDoubleBits(other)
+    case *String:
+        other, ok := right.(*String)
+        return ok && value.encoded == other.encoded
+    default:
+        return reflect.ValueOf(value).Comparable() && value == right
+    }
+}
+
+func RecordComponentHash(input any) int32 {
+    value := CanonicalReference(input)
+    switch typed := recordUnbox(value).(type) {
+    case nil:
+        return 0
+    case bool:
+        if typed { return 1231 }
+        return 1237
+    case int8:
+        return int32(typed)
+    case int16:
+        return int32(typed)
+    case uint16:
+        return int32(typed)
+    case int32:
+        return typed
+    case int64:
+        bits := uint64(typed)
+        return int32(bits ^ (bits >> 32))
+    case float32:
+        return int32(recordFloatBits(typed))
+    case float64:
+        bits := recordDoubleBits(typed)
+        return int32(bits ^ (bits >> 32))
+    case *String:
+        hash, _ := StringHashCode(typed)
+        return hash
+    case *Array:
+        return int32(typed.identityHash())
+    case interface{ HashCode() int32 }:
+        return typed.HashCode()
+    default:
+        panic("unsupported Java record component hash")
+    }
+}
+
+func RecordArrayString(array *Array, descriptor string) *String {
+    if array == nil {
+        return nil
+    }
+    return StringFromGo(descriptor + "@" + strconv.FormatUint(uint64(array.identityHash()), 16))
+}
+
+func RecordString(name string, components []string, values ...any) *String {
+    var result strings.Builder
+    appendEncoded := func(encoded string) {
+        if result.Len()/2 > math.MaxInt32-len(encoded)/2 || result.Len() > math.MaxInt-len(encoded) {
+            panic("Java String exceeds the maximum representable length")
+        }
+        result.WriteString(encoded)
+    }
+    appendEncoded(StringFromGo(name + "[").encoded)
+    for index, component := range components {
+        if index > 0 {
+            appendEncoded(",\x00 \x00")
+        }
+        appendEncoded(StringFromGo(component + "=").encoded)
+        value := CanonicalReference(values[index])
+        if stringer, ok := value.(interface{ ToString() *String }); ok {
+            value = stringer.ToString()
+        }
+        appendEncoded(stringConversion(value))
+    }
+    appendEncoded("]\x00")
+    return &String{encoded: result.String()}
+}

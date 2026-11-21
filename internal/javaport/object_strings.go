@@ -28,6 +28,9 @@ func (program *javaObjectProgram) mappedObjectType(javaType string) string {
 	if javaType == javaStringType {
 		return "*javart.String"
 	}
+	if javaType == javaRecordType {
+		return "javart.Record"
+	}
 	if class := program.classes[javaType]; class != nil {
 		return "*" + class.declaration.Name
 	}

@@ -76,6 +76,9 @@ func (program *javaObjectProgram) emitClass(out *strings.Builder, class *javaObj
 	if err := program.emitStaticClass(out, class); err != nil {
 		return err
 	}
+	if class.declaration.Kind == "RECORD" {
+		fmt.Fprintf(out, "\nfunc (*%s) GppJavaRecord() {}\n", name)
+	}
 
 	ctx := javaObjectContext{program: program, class: class, controlID: new(int)}
 	if len(class.initializers) > 0 {
@@ -190,7 +193,9 @@ func (ctx javaObjectContext) emitConstructor(out *strings.Builder, method *javaO
 	}
 	ctx = ctx.patternScope()
 	var body strings.Builder
-	if call.Receiver != "super" || call.Symbol != "java.lang.Object#<init>()" || ctx.class.parent != nil {
+	objectConstructor := call.Symbol == "java.lang.Object#<init>()" ||
+		(ctx.class.declaration.Kind == "RECORD" && call.Symbol == javaRecordType+"#<init>()")
+	if call.Receiver != "super" || !objectConstructor || ctx.class.parent != nil {
 		callee := ctx.program.methods[call.Symbol]
 		expected := ctx.class
 		if call.Receiver == "super" {
@@ -217,11 +222,19 @@ func (ctx javaObjectContext) emitConstructor(out *strings.Builder, method *javaO
 		return err
 	}
 	ctx.writePatternBody(out, &body)
+	if ctx.class.declaration.Kind == "RECORD" && (declaration.Synthetic || declaration.CompactRecordConstructor) {
+		for _, component := range ctx.class.declaration.RecordComponents {
+			fmt.Fprintf(out, "\tthis.javaField%s = %s\n", component.Name, ctx.arguments[component.Name])
+		}
+	}
 	out.WriteString("}\n")
 	return nil
 }
 
 func (ctx javaObjectContext) emitMethod(out *strings.Builder, method *javaObjectMethod) error {
+	if method.recordImplicit {
+		return ctx.emitRecordMethod(out, method)
+	}
 	name := ctx.class.storageName(ctx.class.declaration.Name)
 	declaration := method.declaration
 	parameters, arguments := ctx.program.objectParameterList(declaration.Parameters)
@@ -497,6 +510,9 @@ func (ctx javaObjectContext) invoke(expression *JavaExpression) (string, error) 
 		return ctx.invokeInterface(expression, method)
 	}
 	receiverClass, _, _ := strings.Cut(expression.Symbol, "#")
+	if receiverClass == javaRecordType && expression.Target != nil {
+		return ctx.invokeRecordReference(expression)
+	}
 	if wrapperPrimitive(receiverClass) != "" || receiverClass == javaNumberType {
 		return ctx.program.primitiveLowering.wrapperCall(expression, ctx.expression)
 	}
