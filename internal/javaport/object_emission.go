@@ -329,7 +329,7 @@ func (ctx javaObjectContext) converted(expression *JavaExpression, target string
 	if _, primitive := primitiveTypes[target]; !primitive {
 		return ctx.convertReference(value, expression.Type, target)
 	}
-	return ctx.program.primitiveLowering.convert(value, expression.Type, target)
+	return ctx.program.primitiveLowering.convertPrimitiveContext(value, expression.Type, target)
 }
 
 func (ctx javaObjectContext) expression(expression *JavaExpression) (string, error) {
@@ -351,6 +351,9 @@ func (ctx javaObjectContext) expression(expression *JavaExpression) (string, err
 	case "NEW_CLASS":
 		if ctx.program.classes[expression.Type] != nil {
 			return ctx.allocateObject(expression)
+		}
+		if wrapperPrimitive(expression.Type) != "" {
+			return ctx.program.primitiveLowering.wrapperCall(expression, ctx.expression)
 		}
 		if _, throwable := javaCatchTypes[expression.Type]; throwable {
 			return ctx.newThrowable(expression)
@@ -375,7 +378,7 @@ func (ctx javaObjectContext) expression(expression *JavaExpression) (string, err
 		value, err := ctx.expression(expression.Operand)
 		return "(" + value + ")", err
 	case "TYPE_CAST":
-		if expression.Operand != nil && primitiveTypes[expression.Type] == "" {
+		if expression.Operand != nil && primitiveTypes[expression.Type] == "" && boxingGoType(expression.Type) == "" {
 			return ctx.converted(expression.Operand, expression.Type)
 		}
 		return ctx.program.primitiveLowering.cast(expression, ctx.expression)
@@ -397,6 +400,9 @@ func (ctx javaObjectContext) field(expression *JavaExpression) (string, error) {
 	if expression.Static && expression.Literal != "" && expression.Receiver != "other" {
 		return ctx.program.primitiveLowering.literal(expression.Type, expression.Literal)
 	}
+	if value := ctx.program.primitiveLowering.booleanConstant(expression); value != "" {
+		return value, nil
+	}
 	field, found := ctx.program.fields[expression.Symbol]
 	if !found || expression.Static || (expression.Receiver != "this" && expression.Receiver != "super") {
 		return "", fmt.Errorf("unsupported field access %s", expression.Symbol)
@@ -412,6 +418,10 @@ func (ctx javaObjectContext) field(expression *JavaExpression) (string, error) {
 }
 
 func (ctx javaObjectContext) invoke(expression *JavaExpression) (string, error) {
+	receiverClass, _, _ := strings.Cut(expression.Symbol, "#")
+	if wrapperPrimitive(receiverClass) != "" || receiverClass == javaNumberType {
+		return ctx.program.primitiveLowering.wrapperCall(expression, ctx.expression)
+	}
 	if expression.Target != nil && expression.Target.Type == javaStringType {
 		return ctx.invokeString(expression)
 	}

@@ -10,6 +10,7 @@ const (
 	javaIOException              = "java.io.IOException"
 	javaIllegalArgumentException = "java.lang.IllegalArgumentException"
 	javaNullPointerException     = "java.lang.NullPointerException"
+	javaClassCastException       = "java.lang.ClassCastException"
 	javaAutoCloseable            = "java.lang.AutoCloseable"
 	javaThrowableArray           = "java.lang.Throwable[]"
 )
@@ -20,6 +21,7 @@ var javaCatchTypes = map[string]string{
 	"java.lang.RuntimeException":                "javart.RuntimeException",
 	javaIllegalArgumentException:                "*javart.IllegalArgumentException",
 	javaNullPointerException:                    "*javart.NullPointerException",
+	javaClassCastException:                      "*javart.ClassCastException",
 	"java.lang.StringIndexOutOfBoundsException": "*javart.StringIndexOutOfBoundsException",
 	javaIOException:                             "*javart.IOException",
 }

@@ -355,6 +355,10 @@ func constructorSuffix(parameters []Parameter) string {
 	var types []string
 	for _, parameter := range parameters {
 		name := parameter.Type
+		if primitive := wrapperPrimitive(name); primitive != "" {
+			types = append(types, "Boxed"+wrapperNames[primitive])
+			continue
+		}
 		name = name[strings.LastIndex(name, ".")+1:]
 		name = strings.ReplaceAll(name, "[]", "Array")
 		types = append(types, exportMethodName(name))

@@ -88,19 +88,19 @@ func (lowering primitiveLowering) emitNativeImports(out *strings.Builder) {
 }
 
 func (lowering *primitiveLowering) emitMethod(name string, declaration Occurrence) (string, error) {
-	result, ok := primitiveTypes[declaration.Result]
-	if !ok || len(declaration.Modifiers) != 2 || !slices.Contains(declaration.Modifiers, "PUBLIC") ||
+	result := lowering.signatureType(declaration.Result)
+	if result == "" || len(declaration.Modifiers) != 2 || !slices.Contains(declaration.Modifiers, "PUBLIC") ||
 		!slices.Contains(declaration.Modifiers, "STATIC") ||
 		len(declaration.Body.Code) != 1 || declaration.Body.Code[0].Kind != "RETURN" ||
 		declaration.Body.Code[0].Expression == nil {
-		return "", fmt.Errorf("expected a public static primitive method with one return expression")
+		return "", fmt.Errorf("expected a public static method with one supported return expression")
 	}
 
 	arguments := map[string]string{}
 	parameters := make([]string, 0, len(declaration.Parameters))
 	for index, parameter := range declaration.Parameters {
-		goType, ok := primitiveTypes[parameter.Type]
-		if !ok {
+		goType := lowering.signatureType(parameter.Type)
+		if goType == "" {
 			return "", fmt.Errorf("unsupported parameter type %s", parameter.Type)
 		}
 		generatedName := fmt.Sprintf("parameter%d", index)
@@ -113,7 +113,7 @@ func (lowering *primitiveLowering) emitMethod(name string, declaration Occurrenc
 	if err != nil {
 		return "", err
 	}
-	value, err = lowering.convert(value, expression.Type, declaration.Result)
+	value, err = lowering.convertUtilityValue(value, expression.Type, declaration.Result)
 	if err != nil {
 		return "", err
 	}
@@ -128,6 +128,22 @@ func (lowering *primitiveLowering) expression(expression *JavaExpression, argume
 	switch expression.Kind {
 	case "LEFT_SHIFT", "RIGHT_SHIFT", "UNSIGNED_RIGHT_SHIFT":
 		return lowering.shift(expression, evaluate)
+	case "EQUAL_TO", "NOT_EQUAL_TO":
+		if primitiveEquality(expression) {
+			return lowering.primitiveComparison(expression, evaluate)
+		}
+		return referenceComparison(expression, canWidenBoxingReference, func(operand *JavaExpression, target string) (string, error) {
+			value, err := evaluate(operand)
+			if err != nil {
+				return "", err
+			}
+			return lowering.convertBoxedReference(value, operand.Type, target)
+		})
+	case "METHOD_INVOCATION", "NEW_CLASS":
+		if wrapperPrimitive(expression.Type) != "" || (expression.Target != nil &&
+			(wrapperPrimitive(expression.Target.Type) != "" || expression.Target.Type == javaNumberType)) {
+			return lowering.wrapperCall(expression, evaluate)
+		}
 	case "IDENTIFIER":
 		if name, ok := arguments[expression.Name]; ok {
 			return name, nil
@@ -145,6 +161,11 @@ func (lowering *primitiveLowering) expression(expression *JavaExpression, argume
 		if expression.Static && expression.Receiver != "other" && expression.Literal != "" {
 			return lowering.literal(expression.Type, expression.Literal)
 		}
+		if value := lowering.booleanConstant(expression); value != "" {
+			return value, nil
+		}
+	case "NULL_LITERAL":
+		return "nil", nil
 	case "BOOLEAN_LITERAL", "CHAR_LITERAL", "INT_LITERAL", "LONG_LITERAL", "FLOAT_LITERAL", "DOUBLE_LITERAL":
 		return lowering.literal(expression.Type, expression.Literal)
 	}
@@ -221,6 +242,20 @@ func (lowering *primitiveLowering) cast(expression *JavaExpression, evaluate fun
 		return "", err
 	}
 	from, to := expression.Operand.Type, expression.Type
+	if boxingGoType(to) != "" {
+		return lowering.wrapperCast(value, from, to)
+	}
+	if primitiveTypes[to] != "" && (from == javaObjectType || from == javaNumberType) {
+		from = "java.lang." + wrapperNames[to]
+		value = lowering.checkedWrapperCast(value, from)
+	}
+	if wrapperPrimitive(from) != "" {
+		return lowering.convertPrimitiveContext(value, from, to)
+	}
+	return lowering.explicitPrimitiveConversion(value, from, to)
+}
+
+func (lowering *primitiveLowering) explicitPrimitiveConversion(value, from, to string) (string, error) {
 	converted, err := lowering.convert("operand", from, to)
 	if err != nil {
 		return "", err
@@ -241,7 +276,7 @@ func (lowering *primitiveLowering) unary(expression *JavaExpression, evaluate fu
 	if err != nil {
 		return "", err
 	}
-	value, err = lowering.convert(value, expression.Operand.Type, expression.Type)
+	value, err = lowering.convertPrimitiveContext(value, expression.Operand.Type, expression.Type)
 	if err != nil {
 		return "", err
 	}
@@ -278,7 +313,7 @@ func (lowering *primitiveLowering) shift(expression *JavaExpression, evaluate fu
 	if err != nil {
 		return "", err
 	}
-	left, err = lowering.convert(left, expression.Left.Type, expression.Type)
+	left, err = lowering.convertPrimitiveContext(left, expression.Left.Type, expression.Type)
 	if err != nil {
 		return "", err
 	}
@@ -287,7 +322,8 @@ func (lowering *primitiveLowering) shift(expression *JavaExpression, evaluate fu
 	if err != nil {
 		return "", err
 	}
-	distanceType := primitiveTypes[expression.Right.Type]
+	right, rightType := lowering.unbox(right, expression.Right.Type)
+	distanceType := primitiveTypes[rightType]
 	if distanceType == "" {
 		return "", fmt.Errorf("unsupported shift distance type %s", expression.Right.Type)
 	}

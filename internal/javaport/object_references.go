@@ -88,6 +88,9 @@ func (program *javaObjectProgram) canConvertReference(source, target string) boo
 	if source == target || source == "null" {
 		return true
 	}
+	if canWidenBoxingReference(source, target) {
+		return true
+	}
 	if class := program.classes[source]; class != nil {
 		if target == javaAutoCloseable && class.closeable {
 			return true
@@ -104,6 +107,9 @@ func (program *javaObjectProgram) canConvertReference(source, target string) boo
 }
 
 func (ctx javaObjectContext) convertReference(value, source, target string) (string, error) {
+	if boxingGoType(target) != "" {
+		return ctx.program.primitiveLowering.convertBoxedReference(value, source, target)
+	}
 	if !ctx.program.canConvertReference(source, target) {
 		return "", fmt.Errorf("unsupported Java reference conversion from %s to %s", source, target)
 	}
@@ -121,6 +127,13 @@ func (ctx javaObjectContext) convertReference(value, source, target string) (str
 }
 
 func (ctx javaObjectContext) referenceComparison(expression *JavaExpression) (string, error) {
+	if primitiveEquality(expression) {
+		return ctx.program.primitiveLowering.primitiveComparison(expression, ctx.expression)
+	}
+	return referenceComparison(expression, ctx.program.canConvertReference, ctx.converted)
+}
+
+func referenceComparison(expression *JavaExpression, assignable func(string, string) bool, convert func(*JavaExpression, string) (string, error)) (string, error) {
 	leftType, rightType := expression.Left.Type, expression.Right.Type
 	equal := expression.Kind == "EQUAL_TO"
 	if leftType == "null" && rightType == "null" {
@@ -130,14 +143,14 @@ func (ctx javaObjectContext) referenceComparison(expression *JavaExpression) (st
 		return "", fmt.Errorf("Java array identity comparison requires a native array reference")
 	}
 	target := leftType
-	if !ctx.program.canConvertReference(rightType, target) {
+	if !assignable(rightType, target) {
 		target = rightType
 	}
 	comparisonOperand := func(operand *JavaExpression) (string, error) {
 		if operand.Type == "null" {
 			return "nil", nil
 		}
-		return ctx.converted(operand, target)
+		return convert(operand, target)
 	}
 	left, err := comparisonOperand(expression.Left)
 	if err != nil {
@@ -147,11 +160,7 @@ func (ctx javaObjectContext) referenceComparison(expression *JavaExpression) (st
 	if err != nil {
 		return "", err
 	}
-	operator := " == "
-	if !equal {
-		operator = " != "
-	}
-	return "(" + left + operator + right + ")", nil
+	return comparisonCode(left, right, equal), nil
 }
 
 func (ctx javaObjectContext) integerArithmetic(expression *JavaExpression) (string, error) {

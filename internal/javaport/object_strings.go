@@ -19,6 +19,9 @@ func (program *javaObjectProgram) objectGoType(javaType string) string {
 }
 
 func (program *javaObjectProgram) mappedObjectType(javaType string) string {
+	if goType := boxingGoType(javaType); goType != "" {
+		return goType
+	}
 	if javaType == javaStringType {
 		return "*javart.String"
 	}

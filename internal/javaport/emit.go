@@ -57,8 +57,8 @@ func emitNonObjectPackage(report Report) (string, error) {
 }
 
 // EmitInterfaces lowers the first supported source form: standalone, public
-// Java interfaces with primitive signatures, integer or boolean constants,
-// and same-package marker interfaces.
+// Java interfaces with primitive and boxed signatures, integer or boolean
+// constants, and same-package marker interfaces.
 func EmitInterfaces(report Report) (string, error) {
 	packageName, err := emissionPackage(report)
 	if err != nil {
@@ -79,9 +79,9 @@ func EmitInterfaces(report Report) (string, error) {
 	}
 
 	var source strings.Builder
-	fmt.Fprintf(&source, "package %s\n", packageName)
 	var constants []string
 	names := map[string]bool{}
+	lowering := primitiveLowering{}
 	for _, file := range report.Files {
 		if len(file.Calls) > 0 {
 			return "", unsupportedSource(file, file.Calls[0], "calls inside standalone interface declarations")
@@ -129,7 +129,7 @@ func EmitInterfaces(report Report) (string, error) {
 			}
 			switch declaration.Kind {
 			case "METHOD":
-				method, signature, err := primitiveInterfaceMethod(declaration)
+				method, signature, err := lowering.emitInterfaceMethod(declaration)
 				if err != nil {
 					return "", unsupportedSource(file, declaration, err.Error())
 				}
@@ -170,13 +170,20 @@ func EmitInterfaces(report Report) (string, error) {
 		source.WriteByte('\n')
 		source.WriteString(constant)
 	}
-	return source.String(), nil
+	header := "package " + packageName + "\n"
+	if lowering.javaRuntime {
+		if packageName == "gpp.java" {
+			return "", fmt.Errorf("Java runtime import conflicts with source package %q", packageName)
+		}
+		header += "\nimport javart \"gpp/java\"\n"
+	}
+	return header + source.String(), nil
 }
 
-func primitiveInterfaceMethod(declaration Occurrence) (string, string, error) {
+func (lowering *primitiveLowering) emitInterfaceMethod(declaration Occurrence) (string, string, error) {
 	if !slices.Contains(declaration.Modifiers, "ABSTRACT") || declaration.HasTypeParams ||
 		len(declaration.Thrown) != 0 {
-		return "", "", fmt.Errorf("interface method requires abstract primitive signature without throws")
+		return "", "", fmt.Errorf("interface method requires an abstract signature without throws")
 	}
 	name := exportMethodName(declaration.Name)
 	if !token.IsIdentifier(name) || !token.IsExported(name) {
@@ -184,16 +191,16 @@ func primitiveInterfaceMethod(declaration Occurrence) (string, string, error) {
 	}
 	parts := make([]string, 0, len(declaration.Parameters))
 	for _, parameter := range declaration.Parameters {
-		goType, ok := primitiveTypes[parameter.Type]
-		if !ok {
+		goType := lowering.signatureType(parameter.Type)
+		if goType == "" {
 			return "", "", fmt.Errorf("unsupported interface parameter type %s", parameter.Type)
 		}
 		parts = append(parts, goType)
 	}
 	signature := "(" + strings.Join(parts, ", ") + ")"
 	if declaration.Result != "void" {
-		result, ok := primitiveTypes[declaration.Result]
-		if !ok {
+		result := lowering.signatureType(declaration.Result)
+		if result == "" {
 			return "", "", fmt.Errorf("unsupported interface result type %s", declaration.Result)
 		}
 		signature += " " + result

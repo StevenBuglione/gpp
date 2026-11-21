@@ -1,0 +1,173 @@
+package gpp.java
+
+// Number is the common reference type of Java's six numeric wrappers.
+type Number interface {
+    javaNumber()
+    ByteValue() int8
+    ShortValue() int16
+    IntValue() int32
+    LongValue() int64
+    FloatValue() float32
+    DoubleValue() float64
+}
+
+type numericPrimitive interface {
+    int8 | int16 | int32 | int64 | float32 | float64
+}
+
+type boxedNumber[T numericPrimitive] struct {
+    value T
+}
+
+func (boxedNumber[T]) javaNumber() {}
+
+func (number boxedNumber[T]) ByteValue() int8 { return int8(number.IntValue()) }
+func (number boxedNumber[T]) ShortValue() int16 { return int16(number.IntValue()) }
+
+func (number boxedNumber[T]) IntValue() int32 {
+    switch any(number.value).(type) {
+    case float32, float64:
+        return IntFromDouble(float64(number.value))
+    default:
+        return int32(number.value)
+    }
+}
+
+func (number boxedNumber[T]) LongValue() int64 {
+    switch any(number.value).(type) {
+    case float32, float64:
+        return LongFromDouble(float64(number.value))
+    default:
+        return int64(number.value)
+    }
+}
+
+func (number boxedNumber[T]) FloatValue() float32 { return float32(number.value) }
+func (number boxedNumber[T]) DoubleValue() float64 { return float64(number.value) }
+
+func newBoxedNumber[T numericPrimitive](value T) boxedNumber[T] {
+    return boxedNumber[T]{value: value}
+}
+
+type Boolean struct { value bool }
+type Byte struct { boxedNumber[int8] }
+type Short struct { boxedNumber[int16] }
+type Character struct { value uint16 }
+type Integer struct { boxedNumber[int32] }
+type Long struct { boxedNumber[int64] }
+type Float struct { boxedNumber[float32] }
+type Double struct { boxedNumber[float64] }
+
+// Constructors allocate a distinct object, even when valueOf would reuse one.
+func NewBoolean(value bool) *Boolean { return &Boolean{value: value} }
+func NewByte(value int8) *Byte { return &Byte{newBoxedNumber(value)} }
+func NewShort(value int16) *Short { return &Short{newBoxedNumber(value)} }
+func NewCharacter(value uint16) *Character { return &Character{value: value} }
+func NewInteger(value int32) *Integer { return &Integer{newBoxedNumber(value)} }
+func NewLong(value int64) *Long { return &Long{newBoxedNumber(value)} }
+func NewFloat(value float32) *Float { return &Float{newBoxedNumber(value)} }
+func NewDouble(value float64) *Double { return &Double{newBoxedNumber(value)} }
+
+func newBoxCache[T any](size int, at func(int) T) []T {
+    cache := make([]T, size)
+    for index := range cache {
+        cache[index] = at(index)
+    }
+    return cache
+}
+
+// These ranges match the mandated constant identities and the default
+// OpenJDK valueOf caches. Float and Double always allocate new wrappers.
+var booleanCache = [2]Boolean{{value: false}, {value: true}}
+var byteCache = newBoxCache(256, func(index int) Byte { return Byte{newBoxedNumber(int8(index-128))} })
+var shortCache = newBoxCache(256, func(index int) Short { return Short{newBoxedNumber(int16(index-128))} })
+var characterCache = newBoxCache(128, func(index int) Character { return Character{value: uint16(index)} })
+var integerCache = newBoxCache(256, func(index int) Integer { return Integer{newBoxedNumber(int32(index-128))} })
+var longCache = newBoxCache(256, func(index int) Long { return Long{newBoxedNumber(int64(index-128))} })
+
+func BoxBoolean(value bool) *Boolean {
+    if value {
+        return &booleanCache[1]
+    }
+    return &booleanCache[0]
+}
+
+func BoxByte(value int8) *Byte { return &byteCache[int(value)+128] }
+
+func BoxShort(value int16) *Short {
+    if value >= -128 && value <= 127 {
+        return &shortCache[int(value)+128]
+    }
+    return NewShort(value)
+}
+
+func BoxCharacter(value uint16) *Character {
+    if value <= 127 {
+        return &characterCache[int(value)]
+    }
+    return NewCharacter(value)
+}
+
+func BoxInteger(value int32) *Integer {
+    if value >= -128 && value <= 127 {
+        return &integerCache[int(value)+128]
+    }
+    return NewInteger(value)
+}
+
+func BoxLong(value int64) *Long {
+    if value >= -128 && value <= 127 {
+        return &longCache[int(value)+128]
+    }
+    return NewLong(value)
+}
+
+func BoxFloat(value float32) *Float { return NewFloat(value) }
+func BoxDouble(value float64) *Double { return NewDouble(value) }
+
+func requireBox[T any](box *T) *T {
+    if box == nil {
+        Raise(&NullPointerException{})
+    }
+    return box
+}
+
+func UnboxBoolean(box *Boolean) bool { return requireBox(box).value }
+func UnboxByte(box *Byte) int8 { return requireBox(box).value }
+func UnboxShort(box *Short) int16 { return requireBox(box).value }
+func UnboxCharacter(box *Character) uint16 { return requireBox(box).value }
+func UnboxInteger(box *Integer) int32 { return requireBox(box).value }
+func UnboxLong(box *Long) int64 { return requireBox(box).value }
+func UnboxFloat(box *Float) float32 { return requireBox(box).value }
+func UnboxDouble(box *Double) float64 { return requireBox(box).value }
+
+// NormalizeReference collapses a Go interface containing a typed nil to null.
+func NormalizeReference[T any](value T) T {
+    if isNullReference(value) {
+        var zero T
+        return zero
+    }
+    return value
+}
+
+// CastBoxedReference performs a checked narrowing cast to a wrapper or Number.
+func CastBoxedReference[T any](value any) T {
+    if isNullReference(value) {
+        var zero T
+        return zero
+    }
+    result, ok := value.(T)
+    if !ok {
+        Raise(&ClassCastException{})
+    }
+    return result
+}
+
+type ClassCastException struct {
+    suppressed suppressedErrors
+}
+
+func (*ClassCastException) Error() string { return "java.lang.ClassCastException" }
+func (*ClassCastException) JavaClassName() string { return "java.lang.ClassCastException" }
+func (*ClassCastException) JavaRuntimeException() {}
+func (*ClassCastException) JavaException() {}
