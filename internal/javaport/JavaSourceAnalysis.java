@@ -3,6 +3,7 @@ import com.sun.source.tree.AssignmentTree;
 import com.sun.source.tree.BinaryTree;
 import com.sun.source.tree.BlockTree;
 import com.sun.source.tree.BreakTree;
+import com.sun.source.tree.CaseTree;
 import com.sun.source.tree.CatchTree;
 import com.sun.source.tree.ClassTree;
 import com.sun.source.tree.CompilationUnitTree;
@@ -34,6 +35,8 @@ import com.sun.source.tree.ProvidesTree;
 import com.sun.source.tree.RequiresTree;
 import com.sun.source.tree.ReturnTree;
 import com.sun.source.tree.StatementTree;
+import com.sun.source.tree.SwitchExpressionTree;
+import com.sun.source.tree.SwitchTree;
 import com.sun.source.tree.ThrowTree;
 import com.sun.source.tree.Tree;
 import com.sun.source.tree.TryTree;
@@ -43,6 +46,7 @@ import com.sun.source.tree.UnionTypeTree;
 import com.sun.source.tree.UsesTree;
 import com.sun.source.tree.VariableTree;
 import com.sun.source.tree.WhileLoopTree;
+import com.sun.source.tree.YieldTree;
 import com.sun.source.util.JavacTask;
 import com.sun.source.util.TreePath;
 import com.sun.source.util.TreePathScanner;
@@ -285,6 +289,8 @@ class JavaSourceAnalysis {
             ExpressionTree expression = null;
             if (statement instanceof ReturnTree returned) {
                 expression = returned.getExpression();
+            } else if (statement instanceof YieldTree yielded) {
+                expression = yielded.getValue();
             } else if (statement instanceof ThrowTree thrown) {
                 expression = thrown.getExpression();
             } else if (statement instanceof ExpressionStatementTree expressionStatement) {
@@ -311,6 +317,9 @@ class JavaSourceAnalysis {
                 if (conditional.getElseStatement() != null) {
                     record += ",\"else\":" + statementRecord(new TreePath(path, conditional.getElseStatement()));
                 }
+            } else if (statement instanceof SwitchTree switched) {
+                expression = switched.getExpression();
+                record += switchCases(path, switched.getCases());
             } else if (statement instanceof WhileLoopTree loop) {
                 expression = loop.getCondition();
                 record += ",\"nested\":" + statementRecord(new TreePath(path, loop.getStatement()));
@@ -336,6 +345,38 @@ class JavaSourceAnalysis {
             }
             if (expression != null) {
                 record += ",\"expression\":" + executableExpression(new TreePath(path, expression));
+            }
+            return record + "}";
+        }
+
+        private String switchCases(TreePath path, List<? extends CaseTree> cases) {
+            return ",\"cases\":[" + cases.stream()
+                .map(arm -> switchCase(new TreePath(path, arm), arm))
+                .collect(Collectors.joining(",")) + "]";
+        }
+
+        @SuppressWarnings("preview")
+        private String switchCase(TreePath path, CaseTree arm) {
+            boolean fallback = false;
+            boolean pattern = false;
+            for (Tree label : arm.getLabels()) {
+                String kind = label.getKind().name();
+                if (kind.equals("DEFAULT_CASE_LABEL")) {
+                    fallback = true;
+                } else if (!kind.equals("CONSTANT_CASE_LABEL") && !(label instanceof ExpressionTree)) {
+                    pattern = true;
+                }
+            }
+            String record = "{\"default\":" + fallback + ",\"pattern\":" + pattern +
+                positionRecord(arm) + ",\"labels\":[" + arm.getExpressions().stream()
+                    .map(label -> executableExpression(TreePath.getPath(path, label)))
+                    .collect(Collectors.joining(",")) + "]";
+            if (arm.getCaseKind() == CaseTree.CaseKind.STATEMENT) {
+                record += ",\"group\":" + bodyRecord(path, arm.getStatements());
+            } else if (arm.getBody() instanceof ExpressionTree value) {
+                record += ",\"value\":" + executableExpression(new TreePath(path, value));
+            } else if (arm.getBody() instanceof StatementTree statement) {
+                record += ",\"rule\":" + statementRecord(new TreePath(path, statement));
             }
             return record + "}";
         }
@@ -439,6 +480,9 @@ class JavaSourceAnalysis {
             } else if (tree instanceof ArrayAccessTree access) {
                 attributes += ",\"target\":" + executableExpression(new TreePath(path, access.getExpression())) +
                     ",\"operand\":" + executableExpression(new TreePath(path, access.getIndex()));
+            } else if (tree instanceof SwitchExpressionTree switched) {
+                attributes += ",\"operand\":" + executableExpression(new TreePath(path, switched.getExpression())) +
+                    switchCases(path, switched.getCases());
             } else if (tree instanceof AssignmentTree assignment) {
                 attributes += ",\"left\":" + executableExpression(new TreePath(path, assignment.getVariable())) +
                     ",\"right\":" + executableExpression(new TreePath(path, assignment.getExpression()));

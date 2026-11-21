@@ -13,6 +13,7 @@ type javaControlTarget struct {
 	id       int
 	label    string
 	isLoop   bool
+	isSwitch bool
 	hasStep  bool
 	useName  bool
 	useStep  bool
@@ -68,7 +69,7 @@ func (target *javaControlTarget) directBranch(continues bool) string {
 	if continues {
 		return "continue " + target.name()
 	}
-	if target.isLoop {
+	if target.isLoop || target.isSwitch {
 		return "break " + target.name()
 	}
 	return "goto " + target.name()
@@ -77,7 +78,11 @@ func (target *javaControlTarget) directBranch(continues bool) string {
 func (ctx javaObjectContext) loopBranch(statement JavaStatement) (string, error) {
 	continues := statement.Kind == "CONTINUE"
 	for target := ctx.control; target != nil; target = target.parent {
-		if statement.Label == "" && !target.isLoop || statement.Label != "" && statement.Label != target.label {
+		if statement.Label == "" {
+			if !target.isLoop && (continues || !target.isSwitch) {
+				continue
+			}
+		} else if statement.Label != target.label {
 			continue
 		}
 		if continues && !target.isLoop {
@@ -114,6 +119,9 @@ func (ctx javaObjectContext) labeledStatement(statement JavaStatement, result st
 	}
 	if isJavaLoop(statement.Nested.Kind) {
 		return ctx.loopStatement(*statement.Nested, result, statement.Label)
+	}
+	if statement.Nested.Kind == "SWITCH" {
+		return ctx.switchStatement(*statement.Nested, result, statement.Label)
 	}
 	ctx = ctx.pushControlTarget(statement.Label, false, false)
 	body, err := ctx.statement(*statement.Nested, result)

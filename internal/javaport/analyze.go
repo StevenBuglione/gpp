@@ -145,21 +145,22 @@ type MethodBody struct {
 }
 
 type JavaStatement struct {
-	Kind       string          `json:"kind"`
-	Expression *JavaExpression `json:"expression,omitempty"`
-	Body       *MethodBody     `json:"body,omitempty"`
-	Catches    []JavaCatch     `json:"catches,omitempty"`
-	Finally    *MethodBody     `json:"finally,omitempty"`
-	Resources  []JavaVariable  `json:"resources,omitempty"`
-	Variable   *JavaVariable   `json:"variable,omitempty"`
-	Then       *JavaStatement  `json:"then,omitempty"`
-	Else       *JavaStatement  `json:"else,omitempty"`
-	Nested     *JavaStatement  `json:"nested,omitempty"`
-	LoopInit   *MethodBody     `json:"loopInit,omitempty"`
-	LoopUpdate *MethodBody     `json:"loopUpdate,omitempty"`
-	Label      string          `json:"label,omitempty"`
-	Line       int64           `json:"line"`
-	Column     int64           `json:"column"`
+	Kind       string           `json:"kind"`
+	Expression *JavaExpression  `json:"expression,omitempty"`
+	Body       *MethodBody      `json:"body,omitempty"`
+	Catches    []JavaCatch      `json:"catches,omitempty"`
+	Finally    *MethodBody      `json:"finally,omitempty"`
+	Resources  []JavaVariable   `json:"resources,omitempty"`
+	Variable   *JavaVariable    `json:"variable,omitempty"`
+	Then       *JavaStatement   `json:"then,omitempty"`
+	Else       *JavaStatement   `json:"else,omitempty"`
+	Nested     *JavaStatement   `json:"nested,omitempty"`
+	LoopInit   *MethodBody      `json:"loopInit,omitempty"`
+	LoopUpdate *MethodBody      `json:"loopUpdate,omitempty"`
+	Label      string           `json:"label,omitempty"`
+	Cases      []JavaSwitchCase `json:"cases,omitempty"`
+	Line       int64            `json:"line"`
+	Column     int64            `json:"column"`
 }
 
 type JavaVariable struct {
@@ -172,6 +173,17 @@ type JavaCatch struct {
 	Name  string      `json:"name"`
 	Types []string    `json:"types"`
 	Body  *MethodBody `json:"body"`
+}
+
+type JavaSwitchCase struct {
+	Labels  []*JavaExpression `json:"labels"`
+	Default bool              `json:"default"`
+	Pattern bool              `json:"pattern"`
+	Group   *MethodBody       `json:"group,omitempty"`
+	Value   *JavaExpression   `json:"value,omitempty"`
+	Rule    *JavaStatement    `json:"rule,omitempty"`
+	Line    int64             `json:"line"`
+	Column  int64             `json:"column"`
 }
 
 type JavaExpression struct {
@@ -191,6 +203,7 @@ type JavaExpression struct {
 	Receiver  string            `json:"receiver,omitempty"`
 	Static    bool              `json:"static,omitempty"`
 	Arguments []*JavaExpression `json:"arguments,omitempty"`
+	Cases     []JavaSwitchCase  `json:"cases,omitempty"`
 	Line      int64             `json:"line"`
 	Column    int64             `json:"column"`
 }

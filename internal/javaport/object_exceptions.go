@@ -48,9 +48,20 @@ func (body *MethodBody) containsStatement(matches func(string) bool) bool {
 }
 
 func (statement *JavaStatement) containsStatement(matches func(string) bool) bool {
-	return statement != nil && (matches(statement.Kind) || statement.Body.containsStatement(matches) ||
+	if statement == nil {
+		return false
+	}
+	if matches(statement.Kind) || statement.Body.containsStatement(matches) ||
 		statement.Then.containsStatement(matches) || statement.Else.containsStatement(matches) ||
-		statement.Nested.containsStatement(matches))
+		statement.Nested.containsStatement(matches) {
+		return true
+	}
+	for _, branch := range statement.Cases {
+		if branch.Group.containsStatement(matches) || branch.Rule.containsStatement(matches) {
+			return true
+		}
+	}
+	return false
 }
 
 func (ctx javaObjectContext) emitJavaReturnBoundary(out *strings.Builder, result string) {

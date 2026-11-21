@@ -115,6 +115,7 @@ type javaObjectContext struct {
 	tryScope  *javaTryBranches
 	control   *javaControlTarget
 	controlID *int
+	yield     *javaYieldTarget
 }
 
 func (ctx javaObjectContext) emitConstructor(out *strings.Builder, method *javaObjectMethod) error {
@@ -214,7 +215,7 @@ func (ctx javaObjectContext) emitMethod(out *strings.Builder, method *javaObject
 	if err := ctx.emitStatements(out, declaration.Body, declaration.Result); err != nil {
 		return err
 	}
-	if declaration.Result != "void" && (hasTry || declaration.Body.containsStatement(isJavaLoop)) {
+	if declaration.Result != "void" && (hasTry || declaration.Body.containsStatement(needsJavaControlFlowTerminal)) {
 		out.WriteString("\tpanic(\"Java method completed without a result\")\n")
 	}
 	out.WriteString("}\n")
@@ -311,6 +312,10 @@ func (ctx javaObjectContext) statement(statement JavaStatement, result string) (
 		return "{\n" + body.String() + "}", nil
 	case "IF":
 		return ctx.ifStatement(statement, result)
+	case "SWITCH":
+		return ctx.switchStatement(statement, result, "")
+	case "YIELD":
+		return ctx.switchYield(expression)
 	case "WHILE_LOOP", "DO_WHILE_LOOP", "FOR_LOOP", "ENHANCED_FOR_LOOP":
 		return ctx.loopStatement(statement, result, "")
 	case "LABELED_STATEMENT":
@@ -411,6 +416,8 @@ func (ctx javaObjectContext) expression(expression *JavaExpression) (string, err
 		return ctx.cast(expression)
 	case "INSTANCE_OF":
 		return ctx.instanceOf(expression)
+	case "SWITCH_EXPRESSION":
+		return ctx.switchExpression(expression)
 	case "ASSIGNMENT":
 		return ctx.assignment(expression, true)
 	case "PREFIX_INCREMENT", "PREFIX_DECREMENT", "POSTFIX_INCREMENT", "POSTFIX_DECREMENT":
