@@ -41,9 +41,11 @@ func validateFileAnnotations(file *File, pkg *PackageSymbols, scope map[string]*
 			if err := validate(value.Annotations, AnnotationTargetClass); err != nil {
 				add(err)
 			}
-			for _, field := range value.Fields {
-				if err := validate(field.Annotations, AnnotationTargetField); err != nil {
-					add(err)
+			for _, fields := range [][]Field{value.Fields, value.StaticFields} {
+				for _, field := range fields {
+					if err := validate(field.Annotations, AnnotationTargetField); err != nil {
+						add(err)
+					}
 				}
 			}
 			for _, method := range value.Methods {

@@ -680,8 +680,22 @@ the object held by a final reference according to its type.
 
 The `static const` syntax covers compile-time constants. The `static final`
 syntax always uses runtime initialization. Java-specific constant folding,
-labeled flow in blank-final analysis, interface initialization, and static
-field annotation metadata remain open.
+labeled flow in blank-final analysis, and interface initialization remain open.
+
+## Static field reflection
+
+Class metadata exposes static fields through `DeclaredStaticFields()`,
+`DeclaredStaticField(name)`, `PublicStaticFields()`, and
+`PublicStaticField(name)`. The declared queries inspect the specified class.
+The public queries include inherited declarations and retain the declaring
+class on each result. The public name lookup starts at the specified class.
+
+Static fields, constants, and runtime-initialized final fields can carry
+annotations targeted at fields. The descriptor reports the declared type
+and flags for final, constant, and public fields. Metadata lookup alone
+leaves the class uninitialized. Reflective `Get()` and `Set(value)` initialize
+the declaring class, including reflective reads of constants. `Set` returns an
+error for final fields and for values outside the declared Go field type.
 
 ---
 

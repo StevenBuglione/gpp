@@ -128,6 +128,32 @@ the initial implementation should return:
 
 A fully-qualified name may be exposed separately later if needed.
 
+## Static Fields
+
+Use class metadata to inspect declared and inherited public static fields.
+
+```go
+field := Settings.class.PublicStaticField("Port")
+if field != nil {
+    fmt.Println(field.Owner.Name, field.Type.Name)
+    fmt.Println(field.Get())
+}
+```
+
+`DeclaredStaticFields` and `DeclaredStaticField(name)` include all static
+declarations on the class. `PublicStaticFields` and `PublicStaticField(name)`
+search the class and its parents. Enumeration can return distinct declarations
+that share a name. The name lookup returns the first public match.
+
+A static field descriptor contains its declaring class, type, annotations,
+visibility, and final and constant flags. Each lookup returns an independent
+metadata snapshot. Static descriptor lookup is passive. Reflective access
+initializes the field's declaring class, and reflective writes to final or
+constant fields return an error. Go callers can use the same methods on
+`GppClass`.
+
+---
+
 ## Fields
 
 `class.fields` returns metadata for all effective instance fields of the class.

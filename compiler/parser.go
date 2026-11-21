@@ -1561,12 +1561,14 @@ func setClassAnnotationLocations(class *ClassDecl, fileName string) {
 		classSpan = Span{Line: class.SourceLine, Column: 1}
 	}
 	setAnnotationUseLocations(class.Annotations, fileName, classSpan)
-	for index := range class.Fields {
-		span := class.Fields[index].Span()
-		if span.Line == 0 || span.Column == 0 {
-			span = classSpan
+	for _, fields := range [][]Field{class.Fields, class.StaticFields} {
+		for index := range fields {
+			span := fields[index].Span()
+			if span.Line == 0 || span.Column == 0 {
+				span = classSpan
+			}
+			setAnnotationUseLocations(fields[index].Annotations, fileName, span)
 		}
-		setAnnotationUseLocations(class.Fields[index].Annotations, fileName, span)
 	}
 	for index := range class.Methods {
 		span := class.Methods[index].Span()

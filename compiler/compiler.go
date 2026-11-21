@@ -33,7 +33,7 @@ type CompileOptions struct {
 
 const generatedFilesManifestName = ".gpp-generated-files.json"
 const generatedGoVersion = "1.27"
-const generatedCodeSchema = 10
+const generatedCodeSchema = 11
 
 type generatedFilesManifest struct {
 	Files    []string                          `json:"files"`
@@ -247,12 +247,16 @@ func CompileProgramWithOptions(program *Program, outputDir string, options Compi
 		}
 	}
 	usesIntrospection := programUsesIntrospection(program)
+	introspectionRuntime := ""
+	if options.ModulePath != "" && (usesIntrospection || programHasStaticFields(emissionFiles)) {
+		introspectionRuntime = options.ModulePath + "/gpp/runtime"
+	}
 	hasStaticInitialization := options.ModulePath != "" && programDeclaresStaticInitialization(emissionFiles)
 	exceptionRuntime := javaExceptionRuntimeImport(options, model)
 	if hasStaticInitialization && exceptionRuntime == "" {
 		exceptionRuntime = options.ModulePath + "/" + classInitializationRuntimePath
 	}
-	packageFingerprints := generatedPackageFingerprints(program, model, options, atExit, usesIntrospection, exceptionRuntime)
+	packageFingerprints := generatedPackageFingerprints(program, model, options, atExit, usesIntrospection, introspectionRuntime, exceptionRuntime)
 	packageOutputs := make(map[string]generatedPackageOutput, len(packageFingerprints))
 	reusePackage := make(map[string]bool, len(packageFingerprints))
 	for packageName, fingerprint := range packageFingerprints {
@@ -262,7 +266,7 @@ func CompileProgramWithOptions(program *Program, outputDir string, options Compi
 			reusePackage[packageName] = true
 		}
 	}
-	if usesIntrospection && options.ModulePath != "" {
+	if introspectionRuntime != "" {
 		if err := ensureSharedIntrospectionRuntime(outputDir); err != nil {
 			return err
 		}
@@ -351,6 +355,7 @@ func CompileProgramWithOptions(program *Program, outputDir string, options Compi
 					functionSignatures,
 					usesIntrospection,
 					atExit,
+					introspectionRuntime,
 					exceptionRuntime,
 					preludeExtensionsNeeded[packageName],
 					fileEmbeds,
@@ -502,7 +507,7 @@ func generatedPackageDirectory(outputDir, packageName string) string {
 	return directory
 }
 
-func emitPackageFiles(files []*File, outputDir string, options CompileOptions, model *SemanticModel, functionSignatures map[string]map[string][]callableSignature, usesIntrospection, atExit bool, exceptionRuntime string, preludeExtensions map[string]bool, embeds map[*File][]compiledEmbed, outputPaths map[*File]string, fingerprint string) (generatedPackageOutput, error) {
+func emitPackageFiles(files []*File, outputDir string, options CompileOptions, model *SemanticModel, functionSignatures map[string]map[string][]callableSignature, usesIntrospection, atExit bool, introspectionRuntime, exceptionRuntime string, preludeExtensions map[string]bool, embeds map[*File][]compiledEmbed, outputPaths map[*File]string, fingerprint string) (generatedPackageOutput, error) {
 	packageName := files[0].Package
 	records := newRecordContext()
 	introspection := newIntrospectionContext(model.Packages[packageName].Classes)
@@ -547,9 +552,7 @@ func emitPackageFiles(files []*File, outputDir string, options CompileOptions, m
 			}
 		}
 		context.Templates = model.Packages[packageName].Templates
-		if usesIntrospection && options.ModulePath != "" {
-			context.IntrospectionRuntimeImport = options.ModulePath + "/gpp/runtime"
-		}
+		context.IntrospectionRuntimeImport = introspectionRuntime
 		if !options.NoPrelude {
 			context.EmitPrelude = !preludeEmitted
 			context.PreludeExtensionsNeeded = preludeExtensions
@@ -593,7 +596,7 @@ func emitPackageFiles(files []*File, outputDir string, options CompileOptions, m
 	return output, nil
 }
 
-func generatedPackageFingerprints(program *Program, model *SemanticModel, options CompileOptions, atExit, usesIntrospection bool, exceptionRuntime string) map[string]string {
+func generatedPackageFingerprints(program *Program, model *SemanticModel, options CompileOptions, atExit, usesIntrospection bool, introspectionRuntime, exceptionRuntime string) map[string]string {
 	filesByPackage := map[string][]*File{}
 	for _, file := range program.Files {
 		filesByPackage[file.Package] = append(filesByPackage[file.Package], file)
@@ -651,6 +654,7 @@ func generatedPackageFingerprints(program *Program, model *SemanticModel, option
 		writePackageHashPart(h, "module="+options.ModulePath)
 		writePackageHashPart(h, "java-runtime-import="+options.JavaRuntimeImport)
 		writePackageHashPart(h, "exception-runtime-import="+exceptionRuntime)
+		writePackageHashPart(h, "introspection-runtime-import="+introspectionRuntime)
 		writePackageHashPart(h, "project-root="+options.ProjectRoot)
 		writePackageHashPart(h, fmt.Sprintf("development=%t", options.Development))
 		writePackageHashPart(h, fmt.Sprintf("no-prelude=%t", options.NoPrelude))
@@ -1284,7 +1288,7 @@ func ensureSharedIntrospectionRuntime(outputDir string) error {
 	if err := os.MkdirAll(directory, 0755); err != nil {
 		return err
 	}
-	source := "package runtime\n\nimport (\n\tgppFmt \"fmt\"\n\tgppReflect \"reflect\"\n\tgppStrconv \"strconv\"\n\tgppStrings \"strings\"\n)\n\n" + introspectionRuntimeDefinitions()
+	source := "package runtime\n\nimport (\n\tgppFmt \"fmt\"\n\tgppReflect \"reflect\"\n\tgppStrconv \"strconv\"\n\tgppStrings \"strings\"\n\tgppSync \"sync\"\n)\n\n" + introspectionRuntimeDefinitions()
 	return writeFileIfChanged(filepath.Join(directory, "runtime.go"), []byte(source), 0644)
 }
 

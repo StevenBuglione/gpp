@@ -187,10 +187,11 @@ func collectIntrospectionMetadataStatement(statement Stmt, metadataTypes map[str
 		if kind == introspectionFields || kind == introspectionMethods || kind == introspectionParents || kind == introspectionParameters {
 			if name, start, ok := introspectionRangeValue(value.RangeKey); ok {
 				metadataTypes[name] = int(map[introspectionExprKind]introspectionExprKind{
-					introspectionFields:     introspectionField,
-					introspectionMethods:    introspectionMethod,
-					introspectionParents:    introspectionClass,
-					introspectionParameters: introspectionParameter,
+					introspectionFields:       introspectionField,
+					introspectionStaticFields: introspectionStaticField,
+					introspectionMethods:      introspectionMethod,
+					introspectionParents:      introspectionClass,
+					introspectionParameters:   introspectionParameter,
 				}[kind])
 				if start >= 0 && len(value.RangeKey) > 0 && !isBlankRangeExpr(value.RangeKey[0]) {
 					addEdit(start, start, "_, ")
@@ -271,6 +272,14 @@ func introspectionExpressionKindNode(expression ExprNode, variables map[string]i
 				return introspectionClass
 			}
 			base := introspectionExpressionKindNode(selector.Receiver, variables, context, valueTypes)
+			if base == introspectionClass {
+				switch selector.Name {
+				case "declaredStaticFields", "DeclaredStaticFields", "publicStaticFields", "PublicStaticFields":
+					return introspectionStaticFields
+				case "declaredStaticField", "DeclaredStaticField", "publicStaticField", "PublicStaticField":
+					return introspectionStaticField
+				}
+			}
 			if base == introspectionAnnotations && (selector.Name == "Find" || selector.Name == "find") {
 				return introspectionAnnotation
 			}
@@ -318,7 +327,7 @@ func introspectionExpressionKindNode(expression ExprNode, variables map[string]i
 				return introspectionParameters
 			}
 		case "annotations", "Annotations":
-			if base == introspectionClass || base == introspectionField || base == introspectionMethod || base == introspectionParameter {
+			if base == introspectionClass || base == introspectionField || base == introspectionStaticField || base == introspectionMethod || base == introspectionParameter {
 				return introspectionAnnotations
 			}
 		case "has", "Has", "find", "Find", "all", "All":
@@ -329,11 +338,11 @@ func introspectionExpressionKindNode(expression ExprNode, variables map[string]i
 				return introspectionAnnotations
 			}
 		case "type", "Type":
-			if base == introspectionField || base == introspectionParameter {
+			if base == introspectionField || base == introspectionStaticField || base == introspectionParameter {
 				return introspectionType
 			}
 		case "owner", "Owner":
-			if base == introspectionField || base == introspectionMethod {
+			if base == introspectionField || base == introspectionStaticField || base == introspectionMethod {
 				return introspectionClass
 			}
 		case "result", "Result":
@@ -356,6 +365,8 @@ func introspectionIndexedKind(kind introspectionExprKind) introspectionExprKind 
 	switch kind {
 	case introspectionFields:
 		return introspectionField
+	case introspectionStaticFields:
+		return introspectionStaticField
 	case introspectionMethods:
 		return introspectionMethod
 	case introspectionParameters:
@@ -370,7 +381,11 @@ func introspectionIndexedKind(kind introspectionExprKind) introspectionExprKind 
 func introspectionSelectorValid(kind introspectionExprKind, name string) bool {
 	switch kind {
 	case introspectionClass:
-		return name == "name" || name == "fields" || name == "annotations" || name == "methods" || name == "parents"
+		return name == "name" || name == "fields" || name == "annotations" || name == "methods" || name == "parents" ||
+			name == "declaredStaticFields" || name == "declaredStaticField" || name == "publicStaticFields" || name == "publicStaticField"
+	case introspectionStaticField:
+		return name == "name" || name == "owner" || name == "type" || name == "get" || name == "set" ||
+			name == "annotations" || name == "final" || name == "constant" || name == "public"
 	case introspectionField:
 		return name == "name" || name == "owner" || name == "type" || name == "get" || name == "set" || name == "addr" || name == "annotations"
 	case introspectionMethod:

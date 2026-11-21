@@ -391,13 +391,14 @@ func emitFile(file *File, context constructorContext) ([]byte, error) {
 	if context.Introspection != nil && context.IntrospectionRuntimeImport == "" &&
 		(len(context.Introspection.Classes) > 0 || len(context.Annotations) > 0 || fileUsesIntrospection(file)) &&
 		!context.Introspection.RuntimeEmitted {
-		fmtAlias, reflectAlias, strconvAlias, stringsAlias, imports := defaultObjectRuntimeImports(body)
+		fmtAlias, reflectAlias, strconvAlias, stringsAlias, syncAlias, imports := defaultObjectRuntimeImports(body)
 		localRuntimeImports = imports
 		localRuntimeDefinitions = introspectionRuntimeDefinitionsWithAliases(
 			fmtAlias,
 			reflectAlias,
 			strconvAlias,
 			stringsAlias,
+			syncAlias,
 		)
 	}
 
@@ -1085,10 +1086,10 @@ func insertAfterImports(body, insertion string) string {
 	return body[:lastEnd] + "\n\n" + insertion + body[lastEnd:]
 }
 
-func defaultObjectRuntimeImports(body string) (string, string, string, string, string) {
+func defaultObjectRuntimeImports(body string) (string, string, string, string, string, string) {
 	imports, _, ok := generatedImports(body)
 	if !ok {
-		return "gppFmt", "gppReflect", "gppStrconv", "gppStrings", "import (\n\tgppFmt \"fmt\"\n\tgppReflect \"reflect\"\n\tgppStrconv \"strconv\"\n\tgppStrings \"strings\"\n)\n\n"
+		return "gppFmt", "gppReflect", "gppStrconv", "gppStrings", "gppSync", "import (\n\tgppFmt \"fmt\"\n\tgppReflect \"reflect\"\n\tgppStrconv \"strconv\"\n\tgppStrings \"strings\"\n\tgppSync \"sync\"\n)\n\n"
 	}
 
 	existingNames := map[string]bool{}
@@ -1116,6 +1117,7 @@ func defaultObjectRuntimeImports(body string) (string, string, string, string, s
 	reflectAlias := choose("reflect", "gppReflect")
 	strconvAlias := choose("strconv", "gppStrconv")
 	stringsAlias := choose("strings", "gppStrings")
+	syncAlias := choose("sync", "gppSync")
 
 	runtimeImportPaths := []struct {
 		path  string
@@ -1125,6 +1127,7 @@ func defaultObjectRuntimeImports(body string) (string, string, string, string, s
 		{"reflect", reflectAlias},
 		{"strconv", strconvAlias},
 		{"strings", stringsAlias},
+		{"sync", syncAlias},
 	}
 	var output strings.Builder
 	for _, item := range runtimeImportPaths {
@@ -1134,9 +1137,9 @@ func defaultObjectRuntimeImports(body string) (string, string, string, string, s
 		fmt.Fprintf(&output, "\t%s %q\n", item.alias, item.path)
 	}
 	if output.Len() == 0 {
-		return fmtAlias, reflectAlias, strconvAlias, stringsAlias, ""
+		return fmtAlias, reflectAlias, strconvAlias, stringsAlias, syncAlias, ""
 	}
-	return fmtAlias, reflectAlias, strconvAlias, stringsAlias, "import (\n" + output.String() + ")\n\n"
+	return fmtAlias, reflectAlias, strconvAlias, stringsAlias, syncAlias, "import (\n" + output.String() + ")\n\n"
 }
 
 func rewriteLogicalPackageImports(body string, imports []ImportDecl, modulePath string) string {
@@ -2246,6 +2249,7 @@ func emitClass(out *strings.Builder, file *File, class *ClassDecl, context const
 	// Runtime class descriptors describe concrete field and method types. A
 	// generic declaration has no concrete Go type until instantiated.
 	if len(class.TypeParamsAST) != 0 {
+		emitGenericStaticClassDescriptor(out, class, classes, context)
 		return nil
 	}
 

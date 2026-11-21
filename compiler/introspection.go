@@ -76,10 +76,10 @@ func programUsesIntrospection(program *Program) bool {
 }
 
 func introspectionRuntimeDefinitions() string {
-	return introspectionRuntimeDefinitionsWithAliases("gppFmt", "gppReflect", "gppStrconv", "gppStrings")
+	return introspectionRuntimeDefinitionsWithAliases("gppFmt", "gppReflect", "gppStrconv", "gppStrings", "gppSync")
 }
 
-func introspectionRuntimeDefinitionsWithAliases(fmtAlias, reflectAlias, strconvAlias, stringsAlias string) string {
+func introspectionRuntimeDefinitionsWithAliases(fmtAlias, reflectAlias, strconvAlias, stringsAlias, syncAlias string) string {
 	definitions := `type GppType struct {
 	Name string
 }
@@ -331,6 +331,8 @@ func __gppFormatObject(class *GppClass, object any, pretty bool) string {
 }
 
 	`
+	definitions += staticFieldMetadataRuntime()
+	definitions = strings.ReplaceAll(definitions, "gppSync", syncAlias)
 	definitions = strings.ReplaceAll(definitions, "gppFmt", fmtAlias)
 	definitions = strings.ReplaceAll(definitions, "gppReflect", reflectAlias)
 	definitions = strings.ReplaceAll(definitions, "gppStrconv", strconvAlias)
@@ -344,6 +346,7 @@ type GppAnnotationType = gppRuntime.GppAnnotationType
 type GppAnnotation = gppRuntime.GppAnnotation
 type GppAnnotations = gppRuntime.GppAnnotations
 type GppField = gppRuntime.GppField
+type GppStaticField = gppRuntime.GppStaticField
 type GppMethod = gppRuntime.GppMethod
 type GppFunction = gppRuntime.GppFunction
 type GppParameter = gppRuntime.GppParameter
@@ -351,6 +354,8 @@ type GppClass = gppRuntime.GppClass
 
 func __gppInvocationError(message string) error { return gppRuntime.GppInvocationError(message) }
 func __gppRegisterClass(class *GppClass) { gppRuntime.RegisterClass(class) }
+func __gppClassWithStaticFields(class *GppClass, fields []GppStaticField) *GppClass { return gppRuntime.ClassWithStaticFields(class, fields) }
+func __gppSetStaticField[T any](name, typeName string, input any, set func(T)) error { return gppRuntime.SetStaticField(name, typeName, input, set) }
 func __gppClassByName(name string) *GppClass { return gppRuntime.ClassByName(name) }
 func __gppRegisterFunction(function GppFunction) { gppRuntime.RegisterFunction(function) }
 func __gppRegisteredFunctions() []GppFunction { return gppRuntime.RegisteredFunctions() }
@@ -445,17 +450,7 @@ func emitClassDescriptor(out *strings.Builder, class *ClassDecl, classes map[str
 		return err
 	}
 
-	parentNames := classParentNames(class)
-	parentReferences := make([]string, 0, len(parentNames))
-	for _, parent := range parentNames {
-		if reference := classDescriptorReference(parent, classes, context); reference != "" {
-			parentReferences = append(parentReferences, reference)
-		}
-	}
-	parents := "nil"
-	if len(parentReferences) > 0 {
-		parents = "[]*GppClass{" + strings.Join(parentReferences, ", ") + "}"
-	}
+	parents := classDescriptorParents(class, classes, context)
 	decodeGOB := "nil"
 	if hasGeneratedSerializationMethod(class, "ToGOB", false) {
 		decoder := serializationQualifierForClass(class)
@@ -470,7 +465,11 @@ func emitClassDescriptor(out *strings.Builder, class *ClassDecl, classes map[str
 		}
 		decodeGOB = fmt.Sprintf("func(data []byte) (any, error) { value := &%s{}; if err := %s(data, value); err != nil { return nil, err }; return value, nil }", class.Name, decoderCall)
 	}
-	fmt.Fprintf(out, "var Gpp%sClass = &GppClass{Name: %q, Package: %q, DecodeGOB: %s, Parents: %s, Annotations: %s, Methods: []GppMethod{\n", class.Name, class.Name, templatePackageScope(context.ModulePath, context.Package), decodeGOB, parents, annotationUsesLiteral(class.Annotations, context))
+	fmt.Fprintf(out, "var Gpp%sClass = ", class.Name)
+	if len(class.StaticFields) != 0 {
+		out.WriteString("__gppClassWithStaticFields(")
+	}
+	fmt.Fprintf(out, "&GppClass{Name: %q, Package: %q, DecodeGOB: %s, Parents: %s, Annotations: %s, Methods: []GppMethod{\n", class.Name, templatePackageScope(context.ModulePath, context.Package), decodeGOB, parents, annotationUsesLiteral(class.Annotations, context))
 	methods, err := effectiveMethodDescriptors(class, classes, false, map[*ClassDecl]bool{})
 	if err != nil {
 		return err
@@ -515,7 +514,12 @@ func emitClassDescriptor(out *strings.Builder, class *ClassDecl, classes map[str
 		fmt.Fprintf(out, "\t\t\treturn &value.%s\n\t\t},\n", access)
 		out.WriteString("\t},\n")
 	}
-	out.WriteString("},\n}\n\n")
+	out.WriteString("},\n}")
+	if len(class.StaticFields) != 0 {
+		emitStaticFieldMetadata(out, class, context)
+	}
+	out.WriteString("\n\n")
+	emitStaticFieldAccessors(out, class, classes)
 	out.WriteString("func init() {\n")
 	for index, field := range fields {
 		if len(field.Path) == 0 {
@@ -841,6 +845,8 @@ const (
 	introspectionClass
 	introspectionFields
 	introspectionField
+	introspectionStaticFields
+	introspectionStaticField
 	introspectionType
 	introspectionMethods
 	introspectionMethod
@@ -852,24 +858,31 @@ const (
 )
 
 var introspectionSelectorNames = map[string]string{
-	"name":        "Name",
-	"fields":      "Fields",
-	"owner":       "Owner",
-	"type":        "Type",
-	"get":         "Get",
-	"set":         "Set",
-	"addr":        "Addr",
-	"annotations": "Annotations",
-	"methods":     "Methods",
-	"parents":     "Parents",
-	"parameters":  "Parameters",
-	"result":      "Result",
-	"static":      "Static",
-	"has":         "Has",
-	"find":        "Find",
-	"all":         "All",
-	"fullName":    "FullName",
-	"args":        "Args",
+	"name":                 "Name",
+	"fields":               "Fields",
+	"declaredStaticFields": "DeclaredStaticFields",
+	"declaredStaticField":  "DeclaredStaticField",
+	"publicStaticFields":   "PublicStaticFields",
+	"publicStaticField":    "PublicStaticField",
+	"final":                "Final",
+	"constant":             "Constant",
+	"public":               "Public",
+	"owner":                "Owner",
+	"type":                 "Type",
+	"get":                  "Get",
+	"set":                  "Set",
+	"addr":                 "Addr",
+	"annotations":          "Annotations",
+	"methods":              "Methods",
+	"parents":              "Parents",
+	"parameters":           "Parameters",
+	"result":               "Result",
+	"static":               "Static",
+	"has":                  "Has",
+	"find":                 "Find",
+	"all":                  "All",
+	"fullName":             "FullName",
+	"args":                 "Args",
 }
 
 func transformIntrospection(src string, context constructorContext) (string, error) {

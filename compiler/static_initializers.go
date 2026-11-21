@@ -181,10 +181,6 @@ func validateStaticInitializers(class *ClassDecl, names map[string]bool) error {
 		if field.IsConstant && field.InitializerAST == nil {
 			return fieldDiagnosticf(class, field, "static constant %s requires an initializer", field.Name)
 		}
-		// Static field descriptors need separate storage and reflection accessors.
-		if len(field.Annotations) != 0 {
-			return fieldDiagnosticf(class, field, "annotations on static fields are not supported yet")
-		}
 	}
 	for index := range class.Methods {
 		method := &class.Methods[index]
