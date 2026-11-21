@@ -109,11 +109,7 @@ func (lowering *primitiveLowering) emitMethod(name string, declaration Occurrenc
 	}
 
 	expression := declaration.Body.Code[0].Expression
-	value, err := lowering.expression(expression, arguments)
-	if err != nil {
-		return "", err
-	}
-	value, err = lowering.convertUtilityValue(value, expression.Type, declaration.Result)
+	value, err := lowering.utilityValue(expression, declaration.Result, arguments)
 	if err != nil {
 		return "", err
 	}
@@ -133,12 +129,10 @@ func (lowering *primitiveLowering) expression(expression *JavaExpression, argume
 			return lowering.binary(expression, evaluate)
 		}
 		return referenceComparison(expression, canWidenBoxingReference, func(operand *JavaExpression, target string) (string, error) {
-			value, err := evaluate(operand)
-			if err != nil {
-				return "", err
-			}
-			return lowering.convertBoxedReference(value, operand.Type, target)
+			return lowering.utilityValue(operand, target, arguments)
 		})
+	case "CONDITIONAL_EXPRESSION":
+		return lowering.utilityConditional(expression, conditionalResultType(expression), arguments)
 	case "METHOD_INVOCATION", "NEW_CLASS":
 		if wrapperPrimitive(expression.Type) != "" || (expression.Target != nil &&
 			(wrapperPrimitive(expression.Target.Type) != "" || expression.Target.Type == javaNumberType)) {

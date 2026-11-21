@@ -4,6 +4,7 @@ import com.sun.source.tree.BlockTree;
 import com.sun.source.tree.CatchTree;
 import com.sun.source.tree.ClassTree;
 import com.sun.source.tree.CompilationUnitTree;
+import com.sun.source.tree.ConditionalExpressionTree;
 import com.sun.source.tree.ExportsTree;
 import com.sun.source.tree.ExpressionStatementTree;
 import com.sun.source.tree.ExpressionTree;
@@ -410,6 +411,10 @@ class JavaSourceAnalysis {
                 attributes += ",\"operand\":" + executableExpression(new TreePath(path, parentheses.getExpression()));
             } else if (tree instanceof UnaryTree unary) {
                 attributes += ",\"operand\":" + executableExpression(new TreePath(path, unary.getExpression()));
+            } else if (tree instanceof ConditionalExpressionTree conditional) {
+                attributes += ",\"condition\":" + executableExpression(new TreePath(path, conditional.getCondition())) +
+                    ",\"whenTrue\":" + executableExpression(new TreePath(path, conditional.getTrueExpression())) +
+                    ",\"whenFalse\":" + executableExpression(new TreePath(path, conditional.getFalseExpression()));
             } else if (tree instanceof BinaryTree binary) {
                 attributes += ",\"left\":" + executableExpression(new TreePath(path, binary.getLeftOperand())) +
                     ",\"right\":" + executableExpression(new TreePath(path, binary.getRightOperand()));

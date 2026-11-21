@@ -178,6 +178,9 @@ type JavaExpression struct {
 	Target    *JavaExpression   `json:"target,omitempty"`
 	Left      *JavaExpression   `json:"left,omitempty"`
 	Right     *JavaExpression   `json:"right,omitempty"`
+	Condition *JavaExpression   `json:"condition,omitempty"`
+	WhenTrue  *JavaExpression   `json:"whenTrue,omitempty"`
+	WhenFalse *JavaExpression   `json:"whenFalse,omitempty"`
 	Literal   string            `json:"literal,omitempty"`
 	UTF16LE   *string           `json:"utf16LE,omitempty"`
 	Symbol    string            `json:"symbol,omitempty"`

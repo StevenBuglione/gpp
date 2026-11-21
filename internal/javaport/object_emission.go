@@ -325,6 +325,9 @@ func (ctx javaObjectContext) statement(statement JavaStatement, result string) (
 }
 
 func (ctx javaObjectContext) converted(expression *JavaExpression, target string) (string, error) {
+	if conditional := nullConditional(expression); conditional != nil {
+		return emitJavaConditional(conditional, target, ctx.program.objectGoType, ctx.converted)
+	}
 	value, err := ctx.expression(expression)
 	if err != nil {
 		return "", err
@@ -370,6 +373,8 @@ func (ctx javaObjectContext) expression(expression *JavaExpression) (string, err
 		return "nil", nil
 	case "EQUAL_TO", "NOT_EQUAL_TO":
 		return ctx.referenceComparison(expression)
+	case "CONDITIONAL_EXPRESSION":
+		return emitJavaConditional(expression, conditionalResultType(expression), ctx.program.objectGoType, ctx.converted)
 	case "ARRAY_LENGTH":
 		if expression.Target == nil || expression.Target.Type != javaThrowableArray {
 			return "", fmt.Errorf("unsupported Java array length expression")

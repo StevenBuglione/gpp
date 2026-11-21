@@ -200,7 +200,7 @@ func (ctx javaObjectContext) referenceComparison(expression *JavaExpression) (st
 func referenceComparison(expression *JavaExpression, assignable func(string, string) bool, convert func(*JavaExpression, string) (string, error)) (string, error) {
 	leftType, rightType := expression.Left.Type, expression.Right.Type
 	equal := expression.Kind == "EQUAL_TO"
-	if leftType == "null" && rightType == "null" {
+	if expression.Left.Kind == "NULL_LITERAL" && expression.Right.Kind == "NULL_LITERAL" {
 		return strconv.FormatBool(equal), nil
 	}
 	if leftType == javaThrowableArray && rightType == javaThrowableArray {
@@ -210,8 +210,11 @@ func referenceComparison(expression *JavaExpression, assignable func(string, str
 	if !assignable(rightType, target) {
 		target = rightType
 	}
+	if target == "null" {
+		target = javaObjectType
+	}
 	comparisonOperand := func(operand *JavaExpression) (string, error) {
-		if operand.Type == "null" {
+		if operand.Kind == "NULL_LITERAL" {
 			return "nil", nil
 		}
 		return convert(operand, target)
