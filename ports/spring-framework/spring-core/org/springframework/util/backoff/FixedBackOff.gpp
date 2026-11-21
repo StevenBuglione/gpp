@@ -1,0 +1,121 @@
+/*
+ * Copyright 2002-present the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+// Ported from BackOff, BackOffExecution, and FixedBackOff in Spring Framework 7.1.0.
+package org.springframework.util.backoff
+
+import (
+    "fmt"
+    "strconv"
+)
+
+const (
+    BackOffExecutionSTOP int64 = -1
+    FixedBackOffDEFAULT_INTERVAL int64 = 5000
+    FixedBackOffUNLIMITED_ATTEMPTS int64 = 9223372036854775807
+)
+
+type BackOff interface {
+    Start() BackOffExecution
+}
+
+type BackOffExecution interface {
+    NextBackOff() int64
+}
+
+class FixedBackOff {
+    interval int64
+    maxAttempts int64
+
+    func init() {
+        this(FixedBackOffDEFAULT_INTERVAL, FixedBackOffUNLIMITED_ATTEMPTS)
+    }
+
+    func init(interval int64) {
+        this(interval, FixedBackOffUNLIMITED_ATTEMPTS)
+    }
+
+    func init(interval int64, maxAttempts int64) {
+        this.interval = interval
+        this.maxAttempts = maxAttempts
+    }
+
+    func SetInterval(interval int64) {
+        this.interval = interval
+    }
+
+    func GetInterval() int64 {
+        return this.interval
+    }
+
+    func SetMaxAttempts(maxAttempts int64) {
+        this.maxAttempts = maxAttempts
+    }
+
+    func GetMaxAttempts() int64 {
+        return this.maxAttempts
+    }
+
+    func Start() BackOffExecution {
+        return fixedBackOffExecution(this)
+    }
+
+    func String() string {
+        return fmt.Sprintf("FixedBackOff[interval=%d, maxAttempts=%s]",
+            this.interval, formatAttempts(this.maxAttempts))
+    }
+}
+
+func NewFixedBackOff() *FixedBackOff {
+    return FixedBackOff()
+}
+
+func NewFixedBackOffWithInterval(interval int64) *FixedBackOff {
+    return FixedBackOff(interval)
+}
+
+func NewFixedBackOffWithLimit(interval int64, maxAttempts int64) *FixedBackOff {
+    return FixedBackOff(interval, maxAttempts)
+}
+
+class fixedBackOffExecution {
+    owner *FixedBackOff
+    currentAttempts int64
+
+    func init(owner *FixedBackOff) {
+        this.owner = owner
+    }
+
+    func NextBackOff() int64 {
+        this.currentAttempts++
+        if this.currentAttempts <= this.owner.GetMaxAttempts() {
+            return this.owner.GetInterval()
+        }
+        return BackOffExecutionSTOP
+    }
+
+    func String() string {
+        return fmt.Sprintf("FixedBackOffExecution[interval=%d, currentAttempts=%d, maxAttempts=%s]",
+            this.owner.GetInterval(), this.currentAttempts, formatAttempts(this.owner.GetMaxAttempts()))
+    }
+}
+
+func formatAttempts(attempts int64) string {
+    if attempts == FixedBackOffUNLIMITED_ATTEMPTS {
+        return "unlimited"
+    }
+    return strconv.FormatInt(attempts, 10)
+}

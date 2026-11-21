@@ -10,8 +10,12 @@ git_path="$(command -v git)"
 mkdir -p "$temp_root/path"
 ln -s "$go_root/bin/go" "$temp_root/path/go"
 ln -s "$git_path" "$temp_root/path/git"
+for command in bash cp dirname mktemp rm; do
+    ln -s "$(command -v "$command")" "$temp_root/path/$command"
+done
 cp -R "$repo_root/tests/testdata/go-interop/." "$temp_root"
 cp -R "$repo_root/examples/mixed" "$temp_root/mixed"
+cp -R "$repo_root/ports/spring-framework" "$temp_root/spring-framework"
 
 assert_output() {
     local expected="$1"
@@ -24,8 +28,8 @@ assert_output() {
     fi
 }
 
-# Limit runtime discovery to the selected Go toolchain and Git. The Go-only
-# fixture uses the standard library and local modules throughout.
+# Limit runtime discovery to Go, Git, and the shell utilities for the fixtures.
+# The isolated PATH has no Java launcher or compiler.
 (
     export PATH="$temp_root/path" GOROOT="$go_root" GOTOOLCHAIN=local
     export GOENV=off GOWORK=off GOFLAGS= GOPROXY=off GOSUMDB=off CGO_ENABLED=0
@@ -43,13 +47,14 @@ assert_output() {
     printf '%s\n' 'Checking an external Go consumer of the generated library'
     "$gpp" compile -module example.com/gpp-interop-library -output generated library/entry.gpp
     test ! -e generated/interop/native_excluded.go
-    "$gpp" compile -module example.com/gpp-spring -output spring \
-        "$repo_root/ports/spring-framework/spring-core/org/springframework/core/Ordering.gpp"
     (
         cd consumer
         go build ./...
         go test ./...
     )
+
+    printf '%s\n' 'Checking the Spring Framework port outside the GPP checkout'
+    GPP="$gpp" "$temp_root/spring-framework/scripts/check.sh"
 
     printf '%s\n' 'Checking native rebuilds after a resource change'
     for _attempt in 1 2; do

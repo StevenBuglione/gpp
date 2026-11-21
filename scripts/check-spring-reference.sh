@@ -9,9 +9,6 @@ fi
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 case "$1" in
     framework)
-        repository=spring-framework
-        tag=v7.1.0
-        revision=f2e4863de60e6a20e827a0aa3c524ffb3ae96ad4
         tasks=(
             :spring-core:gppReferenceInputs
             :spring-beans:gppReferenceInputs
@@ -21,9 +18,6 @@ case "$1" in
         )
         ;;
     boot)
-        repository=spring-boot
-        tag=v4.2.0
-        revision=3a36e91f4d92d2e5986092baf8fa1e4848098f01
         tasks=(
             :core:spring-boot:gppReferenceInputs
             :core:spring-boot-autoconfigure:gppReferenceInputs
@@ -35,6 +29,13 @@ case "$1" in
         ;;
 esac
 
+port_root="$(cd "${GPP_SPRING_PORT_ROOT:-$repo_root/ports/spring-$1}" && pwd)"
+read -r repository tag revision < "$port_root/upstream.lock"
+if [[ -z "$repository" || -z "$tag" || ! "$revision" =~ ^[a-f0-9]{40}$ ]]; then
+    printf 'Invalid upstream lock in %s.\n' "$port_root" >&2
+    exit 2
+fi
+
 case "${3:-}" in
     "") ;;
     --inventory) tasks=(:gppReferenceProjects) ;;
@@ -45,7 +46,7 @@ case "${3:-}" in
             exit 2
         fi
         tasks=(
-            "-Dgpp.springBootProbe=$repo_root/tests/testdata/spring-boot-reference/SpringBootProbe.java"
+            "-Dgpp.springBootProbe=$port_root/testdata/reference/SpringBootProbe.java"
             :module:spring-boot-transaction:gppBootProbe
         )
         ;;
@@ -54,7 +55,7 @@ esac
 
 checkout="$2"
 if [[ ! -e "$checkout" ]]; then
-    git clone --depth 1 --branch "$tag" "https://github.com/spring-projects/$repository.git" "$checkout"
+    git clone --depth 1 --branch "$tag" "$repository" "$checkout"
 fi
 if [[ "$(git -C "$checkout" rev-parse HEAD)" != "$revision" ]] ||
     [[ -n "$(git -C "$checkout" status --porcelain)" ]]; then
