@@ -214,22 +214,13 @@ class Person initializer `init` must return no values or a trailing error
 class Person initializer `init` cannot be static
 ```
 
-An initializer can delegate to another overload of the same class with
-`this(...)`. The delegation must be the first statement. The selected overload
-runs first, then the delegating initializer continues. Delegation cycles are
-compile-time errors.
-
 ## Inheritance initialization order
 
-For a derived class, constructor-style initialization proceeds from the
-base-most class to the most-derived class. An allocated object is available to
-all initializers, and each embedded parent constructor runs once in declared
-parent order:
-
-1. allocate the complete object;
-2. initialize each parent from its own parents outward;
-3. run the selected initializer for the class; and
-4. return the initialized pointer, or the first error encountered.
+Constructor-style initialization allocates the complete object before any
+initializer runs. The selected initializer runs any statements before its
+explicit constructor invocation, calls the selected parent or sibling
+initializer, then runs the rest of its body. An error aborts construction
+before the remaining initializers or statements run.
 
 Example:
 
@@ -257,23 +248,24 @@ employee := Employee("/archive", 42, "Ada")
 ```
 
 `super(...)` selects the sole parent when there is one; `super[Parent](...)`
-selects a parent explicitly when there are multiple. These calls must appear
-before the initializer body. A parent with a no-argument initializer runs
-automatically when omitted. Omitting a parent initializer that requires
-arguments is a compile-time error. The parent calls execute in declared parent
-order regardless of their order in the source.
+selects a parent explicitly when there are multiple. With multiple parents,
+the `super[Parent](...)` calls form a prefix and execute in parent declaration
+order. A zero-argument parent initializer runs automatically when omitted.
+An explicit `super()` can also call a parent with an implicit initializer.
+Omitting a parent initializer that requires arguments is a compile-time error.
 
-`this(...)` delegates to another overload of the same class and must be the
-first statement. The delegated constructor initializes the parent chain once;
-then the delegating constructor continues. Cycles are compile-time errors.
+`this(...)` delegates to another overload of the same class. The delegated
+initializer runs the parent chain once. Delegation cycles are compile-time
+errors. A constructor invocation must be a top-level statement.
 
-If an initializer returns an error, later initializers do not run. Each
-initializer observes the same allocated object and changes made by earlier
-initializers.
+Code before `this(...)` or a call to a single parent may compute arguments or
+assign fields declared by the current class. It may use `throw` to abort
+construction. Reading instance members, calling instance methods on `this`,
+assigning inherited fields, and returning before the invocation are errors.
 
-Initializer dispatch during construction is non-virtual and statically tied to
-each class in the inheritance chain. This prevents a partially initialized
-base from dispatching into a derived initializer unexpectedly.
+The initializer overload itself is selected statically. A call on `this`
+to a public or protected instance method can dispatch to the derived
+implementation while the parent initializer runs.
 
 ## Composite literals remain distinct
 

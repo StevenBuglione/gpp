@@ -519,3 +519,42 @@ func TestGeneratedInitializerHelpersDoNotUsePackageInitName(t *testing.T) {
 		t.Fatalf("generated initializer bridge does not invoke the source initializer:\n%s", generated)
 	}
 }
+
+func TestResolveProgramValidatesEarlyConstructorContext(t *testing.T) {
+	const prefix = `package main
+class Parent {
+    Inherited int
+    func init(input int) {}
+}
+class Child : Parent {
+    value int
+    func init(input int) {
+`
+	cases := []struct {
+		name string
+		body string
+		want string
+	}{
+		{"read_receiver", "input = this.value\nsuper(input)", "early constructor code"},
+		{"read_bare_field", "input = value\nsuper(input)", "early constructor code"},
+		{"write_inherited_field", "this.Inherited = input\nsuper(input)", "early constructor code"},
+		{"receiver_in_arguments", "super(this.value)", "early constructor code"},
+		{"nested_super", "if input > 0 { super(input) }", "top-level initializer statement"},
+		{"nested_this", "if input > 0 { this(input) }", "top-level initializer statement"},
+		{"two_invocations", "this(input)\nsuper(input)", "cannot use both"},
+		{"early_return", "if input < 0 { return }\nsuper(input)", "return cannot precede"},
+		{"delayed_cycle", "input += 1\nthis(input)", "cycle in its init constructor delegation"},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			file, err := ParseFile("early.gpp", prefix+test.body+"\n}\n}\n")
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = ResolveProgram(&Program{Files: []*File{file}})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("expected initializer diagnostic containing %q, got %v", test.want, err)
+			}
+		})
+	}
+}

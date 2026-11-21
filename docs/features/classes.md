@@ -391,9 +391,12 @@ unchanged and bypass initializers.
 Parent initializers run base-first and then in parent declaration order. A
 single parent is selected with `super(...)`; with multiple parents, name the
 parent as in `super[Locale](language)`. A parent with a zero-argument init is
-called automatically if omitted. Use `this(...)` as the first statement to
-delegate to another initializer in the same class. These calls also accept
-named parameters. An initializer does not need an `error` result for fallible
+called automatically if omitted. Use `this(...)` to delegate to another
+initializer in the same class. Statements can precede `this(...)` or a call
+to a single parent. These statements can compute arguments, assign fields
+declared by the current class, or throw an error. The constructor invocation
+must be a top-level statement. These calls also accept named parameters.
+An initializer does not need an `error` result for fallible
 calls: uncaptured errors propagate as exceptions. Declare `error` only when
 the caller should capture the constructor error or handle it with `??`. See the
 [constructor specification](/reference/specifications/constructors) for the

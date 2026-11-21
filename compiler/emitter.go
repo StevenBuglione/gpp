@@ -165,6 +165,9 @@ type constructorContext struct {
 	NativeMethods              map[string]map[string]bool
 	CurrentClass               string
 	CurrentMethod              string
+	InlineParentInitializers   []initializerParentCall
+	InitializerFailureOutput   bool
+	InitializerDelegationTypes map[string]string
 	DeferConstructorLowering   bool
 	CurrentResultAST           TypeNode
 	CurrentExtensionReceiver   string
@@ -1945,13 +1948,18 @@ func emitClass(out *strings.Builder, file *File, class *ClassDecl, context const
 	for _, initializer := range classInitializers(class) {
 		methods = append(methods, *initializer)
 	}
-	initializerParents := make(map[*Method][]initializerParentCall)
+	initializerParents := make(map[string][]initializerParentCall)
+	failureOutputs := make(map[string]bool)
 	for _, initializer := range classInitializers(class) {
+		name := methodOutputName(*initializer)
 		parentCalls, err := initializerParentCalls(class, *initializer, classes, context)
 		if err != nil {
 			return err
 		}
-		initializerParents[initializer] = parentCalls
+		initializerParents[name] = parentCalls
+		hasInline := len(parentCalls) != 0 && parentCalls[0].inline
+		failureOutputs[name] = strings.TrimSpace(methodResultSource(*initializer)) == "" &&
+			(hasInline || initializerDelegationCall(*initializer) != nil)
 	}
 
 	for _, method := range class.Methods {
@@ -1984,6 +1992,19 @@ func emitClass(out *strings.Builder, file *File, class *ClassDecl, context const
 		methodName := methodOutputName(method)
 		exceptionContext := contextForMethod(context, class, method.Name)
 		exceptionContext.CurrentResultAST = methodResultTypeNode(method)
+		if method.Name == "init" {
+			if delegation := initializerDelegationCall(method); delegation != nil {
+				exceptionContext.InitializerDelegationTypes = initializerCallContext(method, delegation, exceptionContext).CurrentParameterTypes
+			}
+			if calls := initializerParents[methodName]; len(calls) != 0 && calls[0].inline {
+				exceptionContext.InlineParentInitializers = calls
+			}
+			if failureOutputs[methodName] {
+				exceptionContext.InitializerFailureOutput = true
+				parameters := []ParameterNode{{Name: initializerFailureOutput, Type: parseTypeText("*error")}}
+				method.ParameterAST = append(parameters, method.ParameterAST...)
+			}
+		}
 		if direct, handled, err := directMethodSource(class, method, exceptionContext); handled {
 			if err != nil {
 				return err
@@ -2123,7 +2144,10 @@ func emitClass(out *strings.Builder, file *File, class *ClassDecl, context const
 		methodName := methodOutputName(*initializer)
 		helperName := constructorInitializerHelperName(*initializer)
 		fmt.Fprintf(out, "func (this *%s) %s(%s) error {\n", class.Name+typeParameterNames(class.TypeParamsAST), helperName, parameters)
-		for _, parentCall := range initializerParents[initializer] {
+		for _, parentCall := range initializerParents[methodName] {
+			if parentCall.inline {
+				continue
+			}
 			fields := make([]string, 0, len(parentCall.path))
 			for _, parent := range parentCall.path {
 				fields = append(fields, classParentFieldName(parent))
@@ -2131,7 +2155,10 @@ func emitClass(out *strings.Builder, file *File, class *ClassDecl, context const
 			call := "this." + strings.Join(fields, ".") + "." + parentCall.helper + "(" + strings.Join(parentCall.arguments, ", ") + ")"
 			fmt.Fprintf(out, "\tif err := %s; err != nil { return err }\n", call)
 		}
-		if strings.TrimSpace(methodResultSource(*initializer)) == "" {
+		if failureOutputs[methodName] {
+			bodyArguments := append([]string{"&failure"}, arguments...)
+			fmt.Fprintf(out, "\tvar failure error\n\tthis.%s(%s)\n\treturn failure\n", methodName, strings.Join(bodyArguments, ", "))
+		} else if strings.TrimSpace(methodResultSource(*initializer)) == "" {
 			fmt.Fprintf(out, "\tthis.%s(%s)\n\treturn nil\n", methodName, strings.Join(arguments, ", "))
 		} else {
 			fmt.Fprintf(out, "\treturn this.%s(%s)\n", methodName, strings.Join(arguments, ", "))
@@ -2203,6 +2230,7 @@ type initializerParentCall struct {
 	path      []string
 	helper    string
 	arguments []string
+	inline    bool
 }
 
 func initializerParentCalls(class *ClassDecl, initializer Method, classes map[string]*ClassDecl, context constructorContext) ([]initializerParentCall, error) {
@@ -2235,7 +2263,7 @@ func initializerParentCalls(class *ClassDecl, initializer Method, classes map[st
 				seenBody = true
 				continue
 			}
-			if seenBody {
+			if seenBody && len(parents) > 1 {
 				return nil, methodDiagnosticf(class, &initializer, "super(...) constructor calls must appear before the initializer body")
 			}
 			parentName := ""
@@ -2248,8 +2276,12 @@ func initializerParentCalls(class *ClassDecl, initializer Method, classes map[st
 			case *IndexExpr:
 				base, baseOK := callee.Receiver.(*NameExpr)
 				name, nameOK := callee.Index.(*NameExpr)
-				if baseOK && base.Name == "super" && nameOK {
-					parentName = name.Name
+				if baseOK && base.Name == "super" {
+					if nameOK {
+						parentName = name.Name
+					} else {
+						parentName, _ = expressionTypeName(callee.Index)
+					}
 				}
 			}
 			if parentName == "" || !containsString(parents, parentName) {
@@ -2275,16 +2307,26 @@ func initializerParentCalls(class *ClassDecl, initializer Method, classes map[st
 			continue
 		}
 		methods := classInitializers(parent)
+		call := explicit[parentName]
+		inline := call != nil && len(parents) == 1
 		if len(methods) == 0 {
-			if explicit[parentName] != nil {
-				return nil, methodDiagnosticf(class, &initializer, "parent %s has no init constructor", parentName)
+			if call != nil && len(call.Arguments) != 0 {
+				return nil, methodDiagnosticf(class, &initializer, "parent %s has only an implicit zero-argument initializer", parentName)
 			}
+			start := len(result)
 			if err := appendInheritedInitializerCalls(&result, parent, []string{parentName}, classes, context, map[*ClassDecl]bool{}); err != nil {
 				return nil, err
 			}
+			if inline {
+				if start == len(result) {
+					result = append(result, initializerParentCall{inline: true})
+				}
+				for index := start; index < len(result); index++ {
+					result[index].inline = true
+				}
+			}
 			continue
 		}
-		call := explicit[parentName]
 		if call == nil {
 			hasZeroArgumentInitializer := false
 			for _, method := range methods {
@@ -2304,9 +2346,16 @@ func initializerParentCalls(class *ClassDecl, initializer Method, classes map[st
 			call = &CallExpr{Callee: &NameExpr{Name: parentName}}
 		}
 		parentTarget := constructorTarget{Class: parent, Classes: classes}
-		resolved, selected, err := resolveClassInitializerCall(call, parentTarget, methods, context)
+		callContext := initializerCallContext(initializer, call, context)
+		resolved, selected, err := resolveClassInitializerCall(call, parentTarget, methods, callContext)
 		if err != nil {
 			return nil, methodDiagnosticf(class, &initializer, "parent %s constructor: %v", parentName, err)
+		}
+		if inline {
+			result = append(result, initializerParentCall{
+				path: []string{parentName}, helper: constructorInitializerHelperName(*selected), arguments: resolved, inline: true,
+			})
+			continue
 		}
 		arguments := make([]string, 0, len(resolved))
 		for _, source := range resolved {

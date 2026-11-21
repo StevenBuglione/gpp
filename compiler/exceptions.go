@@ -160,12 +160,16 @@ func transformExceptionRegion(src string, context constructorContext, rethrowNam
 // declaration from source, but must not send the executable body through the
 // source parser a second time merely to lower exceptions.
 func transformExceptionMethodBodyAST(body string, method *Method, context constructorContext) (string, bool, error) {
-	if method == nil || method.BodyAST == nil || (!blockContainsExceptionSyntax(method.BodyAST) && !blockStartsWithThisInitializerDelegation(method)) {
+	if method == nil || method.BodyAST == nil || (!blockContainsExceptionSyntax(method.BodyAST) &&
+		len(context.InlineParentInitializers) == 0 && (method.Name != "init" || initializerDelegationCall(*method) == nil)) {
 		return body, false, nil
 	}
 	methodContext := context
 	methodContext.CurrentResultAST = method.ResultAST
 	methodContext.CurrentParameterTypes = parameterTypeMapFromNodes(method.ParameterAST)
+	if method.Name == "init" {
+		methodContext.CurrentParameterTypes = coalesceValueTypes(method.BodyAST, methodContext)
+	}
 	methodContext.CurrentParameterAST = parameterTypeNodeMapFromNodes(method.ParameterAST)
 	if err := lowerExceptionPromotions(method.BodyAST, methodContext); err != nil {
 		return body, true, err
@@ -182,22 +186,6 @@ func transformExceptionMethodBodyAST(body string, method *Method, context constr
 		return body, true, err
 	}
 	return text, true, nil
-}
-
-func blockStartsWithThisInitializerDelegation(method *Method) bool {
-	if method == nil || method.Name != "init" || method.BodyAST == nil || len(method.BodyAST.Statements) == 0 {
-		return false
-	}
-	statement, ok := method.BodyAST.Statements[0].(*ExpressionStmt)
-	if !ok {
-		return false
-	}
-	call, ok := statement.Expression.(*CallExpr)
-	if !ok {
-		return false
-	}
-	callee, ok := call.Callee.(*NameExpr)
-	return ok && callee.Name == "this"
 }
 
 func blockContainsExceptionSyntax(block *BlockStmt) bool {
@@ -1497,7 +1485,7 @@ func lowerFunctionGoStmtNode(statement Stmt, context constructorContext, rethrow
 	}
 	switch value := statement.(type) {
 	case *ExpressionStmt:
-		if delegated, handled, err := lowerThisInitializerStatement(value.Expression, context); handled {
+		if delegated, handled, err := lowerExplicitInitializerStatement(value.Expression, context); handled {
 			if err != nil {
 				return nil, err
 			}
@@ -1959,7 +1947,7 @@ func lowerExceptionGoStmtNode(statement Stmt, context constructorContext, rethro
 	}
 	switch value := statement.(type) {
 	case *ExpressionStmt:
-		if delegated, handled, err := lowerThisInitializerStatement(value.Expression, context); handled {
+		if delegated, handled, err := lowerExplicitInitializerStatement(value.Expression, context); handled {
 			if err != nil {
 				return nil, err
 			}
@@ -2188,9 +2176,10 @@ func lowerExceptionStmtNodes(statement Stmt, context constructorContext) error {
 	}
 	if value, ok := statement.(*ExpressionStmt); ok {
 		if call, isCall := value.Expression.(*CallExpr); isCall && context.CurrentMethod == "init" && isSuperInitializerCall(call) {
-			// The matching parent calls are emitted by the constructor bridge,
-			// before the source initializer body runs.
-			value.Expression = &CallExpr{Callee: &FunctionLiteralExpr{Type: &FunctionType{}, Body: &BlockStmt{}}}
+			if len(context.InlineParentInitializers) == 0 {
+				// Multi-parent GPP initializers run in declaration order in the bridge.
+				value.Expression = &CallExpr{Callee: &FunctionLiteralExpr{Type: &FunctionType{}, Body: &BlockStmt{}}}
+			}
 			return nil
 		}
 		if delegated, handled, err := lowerThisInitializerStatement(value.Expression, context); handled {

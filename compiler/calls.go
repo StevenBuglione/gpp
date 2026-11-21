@@ -2081,11 +2081,11 @@ func resolveStaticMethodCall(
 				match = false
 				break
 			}
-			actual := staticExpressionTypeNode(expression, context, nil)
+			actual := staticExpressionTypeNode(expression, context, context.CurrentParameterTypes)
 			expected := signature.Parameters[index].typeText()
 			if actual != "" && actual != expected &&
 				!isAssignableStaticType(actual, expected, context) &&
-				!isUnknownStaticArgumentNode(expression) {
+				!isUnknownStaticArgumentNode(expression, context) {
 				match = false
 				break
 			}
@@ -2428,9 +2428,9 @@ func nativeSelectorFieldTypeNode(selector *SelectorExpr, context constructorCont
 	return ""
 }
 
-func isUnknownStaticArgumentNode(expression ExprNode) bool {
-	_, ok := expression.(*NameExpr)
-	return ok
+func isUnknownStaticArgumentNode(expression ExprNode, context constructorContext) bool {
+	name, ok := expression.(*NameExpr)
+	return ok && context.CurrentParameterTypes[name.Name] == "" && context.GlobalValueTypes[name.Name] == ""
 }
 
 func copyIgnoredSource(src string, start int, out *strings.Builder) (int, bool, error) {

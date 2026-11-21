@@ -127,3 +127,199 @@ func main() {
 		t.Fatalf("native GPP and Java constructor dispatch diverged\nGo:\n%s\nJava:\n%s", got, want)
 	}
 }
+
+func TestNativeGPPFlexibleConstructorsMatchJava(t *testing.T) {
+	java, release := referenceJDK(t)
+	if release < 25 {
+		t.Skip("flexible constructor bodies are finalized in Java SE 25")
+	}
+	root := t.TempDir()
+	reference := filepath.Join(root, "Probe.java")
+	writeTestFile(t, reference, `class Probe {
+    static final RuntimeException EARLY = new RuntimeException("early");
+    static final RuntimeException PARENT = new RuntimeException("parent");
+    static class Trace {
+        int digits;
+        void mark(int digit) { digits = digits * 10 + digit; }
+    }
+    static class Parent {
+        int observed;
+        int input;
+        Parent(Trace t, int input) {
+            t.mark(3);
+            if (input == 26) { throw PARENT; }
+            this.observed = read();
+            this.input = input;
+        }
+        Parent(Trace t, String input) { t.mark(9); }
+        int read() { return 100; }
+    }
+    static class Child extends Parent {
+        int early;
+        Child(Trace t) {
+            t.mark(1);
+            int setting = 8;
+            this(t, setting);
+            t.mark(5);
+        }
+        Child(Trace t, int setting) {
+            t.mark(2);
+            if (setting < 0) { throw EARLY; }
+            if (setting > 0) { this.early = setting; }
+            int forwarded = setting * 2;
+            super(t, forwarded);
+            t.mark(4);
+        }
+        @Override int read() { return early; }
+    }
+    static class VoidChild extends Parent {
+        VoidChild(Trace t, int setting) {
+            t.mark(2);
+            int forwarded = setting * 2;
+            super(t, forwarded);
+            t.mark(4);
+        }
+    }
+    static class Marker {}
+    static class DefaultParent extends Marker {}
+    static class DefaultCall extends DefaultParent {
+        DefaultCall(Trace t) {
+            t.mark(2);
+            super();
+            t.mark(4);
+        }
+    }
+    public static void main(String[] args) {
+        var t = new Trace();
+        var value = new Child(t);
+        System.out.println(t.digits + " " + value.observed + " " + value.input);
+        for (int input : new int[]{-1, 13}) {
+            var failed = new Trace();
+            try { new Child(failed, input); }
+            catch (RuntimeException e) { System.out.println(failed.digits + " " + (e == EARLY || e == PARENT) + " " + e.getMessage()); }
+        }
+        var failed = new Trace();
+        try { new VoidChild(failed, 13); }
+        catch (RuntimeException e) { System.out.println(failed.digits + " " + (e == PARENT) + " " + e.getMessage()); }
+        var defaultTrace = new Trace();
+        new DefaultCall(defaultTrace);
+        System.out.println(defaultTrace.digits);
+    }
+}`)
+	classes := filepath.Join(root, "classes")
+	runObjectTestCommand(t, root, filepath.Join(filepath.Dir(java), "javac"),
+		"--release", strconv.Itoa(release), "-d", classes, reference)
+	want := runObjectTestCommand(t, root, java, "-cp", classes, "Probe")
+	source := filepath.Join(root, "constructors.gpp")
+	writeTestFile(t, source, `package reference.flexible
+
+import "errors"
+
+var EarlyFailure = errors.New("early")
+var ParentFailure = errors.New("parent")
+
+class Trace {
+    Digits int32
+    func Mark(digit int32) { this.Digits = this.Digits * 10 + digit }
+}
+
+class Parent {
+    Observed int32
+    Input int32
+    func init(t *Trace, input int32) error {
+        t.Mark(3)
+        if input == 26 { return ParentFailure }
+        this.Observed = this._read()
+        this.Input = input
+        return nil
+    }
+    func init(t *Trace, input string) { t.Mark(9) }
+    func _read() int32 { return 100 }
+}
+
+class Child : Parent {
+    early int32
+    func init(t *Trace) {
+        t.Mark(1)
+        var setting int32 = 8
+        this(t, setting)
+        t.Mark(5)
+    }
+    func init(t *Trace, setting int32) error {
+        t.Mark(2)
+        if setting < 0 { throw EarlyFailure }
+        if setting > 0 { this.early = setting }
+        var forwarded int32 = setting * 2
+        super(t, forwarded)
+        t.Mark(4)
+        return nil
+    }
+    func _read() int32 { return this.early }
+}
+
+class VoidChild : Parent {
+    func init(t *Trace, setting int32) {
+        t.Mark(2)
+        var forwarded int32 = setting * 2
+        if setting == 13 {
+            var forwarded string = "inner scope"
+            _ = forwarded
+        }
+        super(input: forwarded, t: t)
+        t.Mark(4)
+    }
+}
+
+class Marker {}
+class DefaultParent : Marker {}
+class DefaultCall : DefaultParent {
+    func init(t *Trace) {
+        t.Mark(2)
+        super()
+        t.Mark(4)
+    }
+}
+
+func NewTrace() *Trace { return Trace() }
+func NewChild(t *Trace) (*Child, error) { return Child(t) }
+func NewChildWithSetting(t *Trace, input int32) (*Child, error) { return Child(t, input) }
+func NewVoidChild(t *Trace, input int32) (*VoidChild, error) { return VoidChild(t, input) }
+func NewDefaultCall(t *Trace) *DefaultCall { return DefaultCall(t) }
+`)
+	output := filepath.Join(root, "generated")
+	if err := compiler.CompileFilesWithOptions([]string{source}, output,
+		compiler.CompileOptions{ModulePath: "example.com/flexible-constructors"}); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(output, "main.go"), `package main
+
+import (
+    "fmt"
+    "example.com/flexible-constructors/reference/flexible"
+)
+
+func main() {
+    trace := flexible.NewTrace()
+    value, err := flexible.NewChild(trace)
+    if err != nil { panic(err) }
+    fmt.Println(trace.Digits, value.Observed, value.Input)
+    for _, input := range []int32{-1, 13} {
+        trace := flexible.NewTrace()
+        instance, err := flexible.NewChildWithSetting(trace, input)
+        if instance != nil || err == nil { panic("returned a partial instance") }
+        fmt.Println(trace.Digits, err == flexible.EarlyFailure || err == flexible.ParentFailure, err)
+    }
+    trace = flexible.NewTrace()
+    instance, err := flexible.NewVoidChild(trace, 13)
+    if instance != nil || err == nil { panic("returned a partial instance") }
+    fmt.Println(trace.Digits, err == flexible.ParentFailure, err)
+    trace = flexible.NewTrace()
+    _ = flexible.NewDefaultCall(trace)
+    fmt.Println(trace.Digits)
+}
+`)
+	got := runObjectTestCommand(t, output, "go", "run", "-buildvcs=false", ".")
+	if got != want {
+		t.Fatalf("native GPP and Java flexible constructors diverged\nGo:\n%s\nJava:\n%s", got, want)
+	}
+}

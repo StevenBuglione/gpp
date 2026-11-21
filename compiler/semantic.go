@@ -892,6 +892,11 @@ func validateClass(pkg *PackageSymbols, class *ClassDecl) error {
 			if result != "" && result != "error" {
 				return methodDiagnosticf(class, &method, "class %s initializer `init` must return no values or error", class.Name)
 			}
+			for _, name := range []string{initializerFailureOutput, "__gppInitInvocationError"} {
+				if containsString(initializerParameterNames(method), name) || tokensContainIdentifier(method.BodyTokens, name) {
+					return methodDiagnosticf(class, &method, "initializer name %s is reserved for generated Go code", name)
+				}
+			}
 		}
 		if method.IsStatic && tokensContainIdentifier(methodBodyTokens(method), "this") {
 			return methodDiagnosticf(class, &method, "static method %s has no this", method.Name)
@@ -993,41 +998,17 @@ func validateInitializerDelegation(class *ClassDecl, classes map[string]*ClassDe
 	target := context.Targets[class.Name]
 	delegates := map[string]string{}
 	for _, method := range initializers {
-		if method.BodyAST == nil {
-			continue
+		if err := validateExplicitInitializerCalls(class, method, classes); err != nil {
+			return err
 		}
-		delegationIndex := -1
-		var delegation *CallExpr
-		for index, statement := range method.BodyAST.Statements {
-			expression, ok := statement.(*ExpressionStmt)
-			if !ok {
-				continue
+		if delegation := initializerDelegationCall(*method); delegation != nil {
+			callContext := initializerCallContext(*method, delegation, context)
+			_, selected, err := resolveClassInitializerCall(delegation, target, initializers, callContext)
+			if err != nil {
+				return methodDiagnosticf(class, method, "initializer delegation: %v", err)
 			}
-			call, ok := expression.Expression.(*CallExpr)
-			if !ok {
-				continue
-			}
-			name, ok := call.Callee.(*NameExpr)
-			if !ok || name.Name != "this" {
-				continue
-			}
-			if delegationIndex >= 0 {
-				return methodDiagnosticf(class, method, "initializer delegation this(...) may appear only once")
-			}
-			delegationIndex, delegation = index, call
+			delegates[methodOutputName(*method)] = methodOutputName(*selected)
 		}
-		if delegationIndex < 0 {
-			continue
-		}
-		if delegationIndex != 0 {
-			return methodDiagnosticf(class, method, "initializer delegation this(...) must be the first statement")
-		}
-		context.CurrentParameterTypes = parameterTypeMapFromNodes(method.ParameterAST)
-		_, selected, err := resolveClassInitializerCall(delegation, target, initializers, context)
-		if err != nil {
-			return methodDiagnosticf(class, method, "initializer delegation: %v", err)
-		}
-		delegates[methodOutputName(*method)] = methodOutputName(*selected)
 	}
 	for start := range delegates {
 		seen := map[string]bool{}

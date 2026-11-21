@@ -1174,51 +1174,24 @@ func lowerThisInitializerStatement(expression ExprNode, context constructorConte
 		return nil, true, sourceLineError(call.Span(), fmt.Errorf("cannot resolve this(...) outside a class initializer"))
 	}
 	methods := classInitializers(target.Class)
-	resolved, method, err := resolveClassInitializerCall(call, target, methods, context)
+	callContext := context
+	if context.InitializerDelegationTypes != nil {
+		callContext.CurrentParameterTypes = context.InitializerDelegationTypes
+	}
+	resolved, method, err := resolveClassInitializerCall(call, target, methods, callContext)
 	if err != nil {
 		return nil, true, sourceLineError(call.Span(), err)
 	}
-	arguments := make([]CallArg, 0, len(resolved))
-	for _, source := range resolved {
-		argument, parseErr := parseStaticArgumentNode(source)
-		if parseErr != nil {
-			return nil, true, parseErr
-		}
-		argument, parseErr = lowerExceptionExprNode(argument, context)
-		if parseErr != nil {
-			return nil, true, parseErr
-		}
-		arguments = append(arguments, CallArg{Value: argument})
+	arguments, err := initializerArguments(resolved, context)
+	if err != nil {
+		return nil, true, err
 	}
 	call = &CallExpr{
 		Callee:    &SelectorExpr{Receiver: &NameExpr{Name: "this"}, Name: constructorInitializerHelperName(*method)},
 		Arguments: arguments,
 		SpanValue: call.Span(),
 	}
-	if !initializerChainMayFail(target.Class, *method, classesForClass(context, target.Class), context, map[*ClassDecl]bool{}) {
-		return &ExpressionStmt{Expression: call, SpanValue: expression.Span()}, true, nil
-	}
-	currentResult := ""
-	if context.CurrentResultAST != nil {
-		currentResult, _ = typeNodeSource(context.CurrentResultAST)
-	}
-	if strings.TrimSpace(currentResult) != "error" {
-		return &ExpressionStmt{
-			Expression: &CallExpr{Callee: &NameExpr{Name: "__gppThrow"}, Arguments: []CallArg{{Value: call}}},
-			SpanValue:  expression.Span(),
-		}, true, nil
-	}
-	errName := "__gpp_delegatedInitErr"
-	return &IfStmt{
-		Init: &AssignmentExpr{
-			Left:     []ExprNode{&NameExpr{Name: errName}},
-			Operator: ":=",
-			Right:    []ExprNode{call},
-		},
-		Condition: &BinaryExpr{Left: &NameExpr{Name: errName}, Operator: "!=", Right: &NameExpr{Name: "nil"}},
-		Body:      &BlockStmt{Statements: []Stmt{&ReturnStmt{Values: []ExprNode{&NameExpr{Name: errName}}}}},
-		SpanValue: expression.Span(),
-	}, true, nil
+	return forwardInitializerFailure(call, context), true, nil
 }
 
 func resolveClassInitializerCall(call *CallExpr, target constructorTarget, methods []*Method, context constructorContext) ([]string, *Method, error) {
@@ -1379,7 +1352,8 @@ func initializerChainMayFail(class *ClassDecl, initializer Method, classes map[s
 	context.CurrentParameterTypes = parameterTypeMapFromNodes(initializer.ParameterAST)
 	if delegated := initializerDelegationCall(initializer); delegated != nil {
 		target := constructorTarget{Class: class, Classes: classes}
-		_, selected, err := resolveClassInitializerCall(delegated, target, classInitializers(class), context)
+		callContext := initializerCallContext(initializer, delegated, context)
+		_, selected, err := resolveClassInitializerCall(delegated, target, classInitializers(class), callContext)
 		return err != nil || initializerChainMayFail(class, *selected, classes, context, visiting)
 	}
 	if visiting[class] {
@@ -1392,6 +1366,9 @@ func initializerChainMayFail(class *ClassDecl, initializer Method, classes map[s
 		return true
 	}
 	for _, call := range calls {
+		if call.helper == "" {
+			continue
+		}
 		parent := classes[call.path[len(call.path)-1]]
 		for _, candidate := range classInitializers(parent) {
 			if constructorInitializerHelperName(*candidate) != call.helper {
@@ -1406,20 +1383,15 @@ func initializerChainMayFail(class *ClassDecl, initializer Method, classes map[s
 }
 
 func initializerDelegationCall(initializer Method) *CallExpr {
-	if initializer.BodyAST == nil || len(initializer.BodyAST.Statements) == 0 {
+	if initializer.BodyAST == nil {
 		return nil
 	}
-	expression, ok := initializer.BodyAST.Statements[0].(*ExpressionStmt)
-	if !ok {
-		return nil
-	}
-	call, ok := expression.Expression.(*CallExpr)
-	if !ok {
-		return nil
-	}
-	name, ok := call.Callee.(*NameExpr)
-	if ok && name.Name == "this" {
-		return call
+	for _, statement := range initializer.BodyAST.Statements {
+		if expression, ok := statement.(*ExpressionStmt); ok {
+			if call, ok := expression.Expression.(*CallExpr); ok && isThisInitializerCall(call) {
+				return call
+			}
+		}
 	}
 	return nil
 }
