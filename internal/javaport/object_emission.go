@@ -47,6 +47,9 @@ func (program *javaObjectProgram) emitClass(out *strings.Builder, class *javaObj
 		out.WriteString("\tjavaObjectOwner any\n")
 		out.WriteString("\tjavaObjectIdentity javart.ObjectIdentity\n")
 	}
+	if class.isEnum() {
+		out.WriteString("\tjavaEnumName *javart.String\n\tjavaEnumOrdinal int32\n")
+	}
 	for _, field := range class.fields {
 		if !slices.Contains(field.Modifiers, "STATIC") {
 			fmt.Fprintf(out, "\tjavaField%s %s\n", field.Name, program.objectGoType(field.Type))
@@ -74,6 +77,9 @@ func (program *javaObjectProgram) emitClass(out *strings.Builder, class *javaObj
 			name, objectViewName(ancestor), program.objectGoType(ancestor.declaration.Symbol), view)
 	}
 	program.emitObjectIdentity(out, class, name)
+	if class.isEnum() {
+		program.emitEnumMembers(out, class, name)
+	}
 	class.emitInterfaceMarkers(out, name)
 	if err := program.emitInstanceFieldBridges(out, class, name); err != nil {
 		return err
@@ -155,8 +161,15 @@ func (ctx javaObjectContext) emitConstructor(out *strings.Builder, method *javaO
 	ctx.arguments = objectParameterNames(declaration.Parameters)
 	if !ctx.class.isAbstract() {
 		allocator := ctx.class.storageName(method.allocatorName())
-		fmt.Fprintf(out, "\nfunc %s(%s) *%s {\n", allocator, parameters, name)
-		if guard := ctx.program.classInitialization(ctx.class); guard != "" {
+		allocationParameters := parameters
+		if ctx.class.hasEnumIdentity() {
+			allocationParameters = "enumName *javart.String, enumOrdinal int32"
+			if parameters != "" {
+				allocationParameters += ", " + parameters
+			}
+		}
+		fmt.Fprintf(out, "\nfunc %s(%s) *%s {\n", allocator, allocationParameters, name)
+		if guard := ctx.program.classInitialization(ctx.class); guard != "" && !ctx.class.hasEnumIdentity() {
 			fmt.Fprintf(out, "\t%s\n", guard)
 		}
 		if ctx.class.enclosing != nil {
@@ -164,6 +177,9 @@ func (ctx javaObjectContext) emitConstructor(out *strings.Builder, method *javaO
 			out.WriteString("\tjavart.RequireNonNull(javaOuter)\n")
 		}
 		fmt.Fprintf(out, "\tthis := new(%s)\n", name)
+		if ctx.class.hasEnumIdentity() {
+			out.WriteString("\tthis.javaEnumName = enumName\n\tthis.javaEnumOrdinal = enumOrdinal\n")
+		}
 		if ctx.class.parent != nil {
 			out.WriteString("\tthis.GppJavaBindOwner(this)\n")
 		}
@@ -209,7 +225,8 @@ func (ctx javaObjectContext) emitConstructor(out *strings.Builder, method *javaO
 	ctx = ctx.patternScope()
 	var body strings.Builder
 	objectConstructor := call.Symbol == "java.lang.Object#<init>()" ||
-		(ctx.class.declaration.Kind == "RECORD" && call.Symbol == javaRecordType+"#<init>()")
+		(ctx.class.declaration.Kind == "RECORD" && call.Symbol == javaRecordType+"#<init>()") ||
+		(ctx.class.isEnum() && call.Symbol == javaEnumType+"#<init>(java.lang.String,int)")
 	if call.Receiver != "super" || !objectConstructor || ctx.class.parent != nil {
 		callee := ctx.program.methods[call.Symbol]
 		expected := ctx.class
@@ -288,6 +305,8 @@ func (ctx javaObjectContext) emitMethod(out *strings.Builder, method *javaObject
 	}
 	if method.defaultMethod != nil {
 		fmt.Fprintf(out, "\t%s%s\n", returnKeyword(result), ctx.defaultCall(method.defaultMethod, "this", arguments))
+	} else if method.enumImplicit {
+		out.WriteString("\treturn this.Name()\n")
 	} else if declaration.Body == nil {
 		fmt.Fprintf(out, "\tpanic(%q)\n", "abstract Java method "+declaration.Symbol)
 	} else {
@@ -589,6 +608,9 @@ func (ctx javaObjectContext) field(expression *JavaExpression) (string, error) {
 }
 
 func (ctx javaObjectContext) invoke(expression *JavaExpression) (string, error) {
+	if strings.HasPrefix(expression.Symbol, javaEnumType+"#") {
+		return ctx.invokeJavaEnum(expression)
+	}
 	switch expression.Symbol {
 	case "java.lang.Object#toString()", "java.lang.Object#hashCode()":
 		return ctx.invokeObjectStringMethod(expression)

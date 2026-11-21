@@ -36,6 +36,9 @@ func (program *javaObjectProgram) mappedObjectType(javaType string) string {
 	if javaType == javaRecordType {
 		return "javart.Record"
 	}
+	if javaType == javaEnumType {
+		return "javart.Enum"
+	}
 	if class := program.classes[javaType]; class != nil {
 		return "*" + class.goTypeName()
 	}

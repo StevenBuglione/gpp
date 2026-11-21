@@ -643,7 +643,10 @@ class JavaSourceAnalysis {
                     attributes += ",\"target\":" + executableExpression(qualifierPath);
                 }
             } else if (tree instanceof NewClassTree call) {
-                if (call.getClassBody() == null) {
+                var enclosing = trees.getElement(path.getParentPath());
+                boolean enumConstant = enclosing instanceof VariableElement variable &&
+                    variable.getKind() == ElementKind.ENUM_CONSTANT;
+                if (call.getClassBody() == null || enumConstant) {
                     var selected = trees.getElement(path);
                     attributes += ",\"symbol\":" + quote(symbol(selected)) + callArguments(path, call.getArguments());
                     if (call instanceof JCNewClass attributed) {
@@ -885,6 +888,9 @@ class JavaSourceAnalysis {
             }
             if (element instanceof VariableElement variable) {
                 result += erasedTypeAttribute("erasedType", variable.asType());
+            }
+            if (element.getKind() == ElementKind.ENUM_CONSTANT) {
+                result += ",\"enumConstant\":true";
             }
             return result;
         }

@@ -113,7 +113,9 @@ func (ctx javaObjectContext) emitJavaSwitchMatch(out *strings.Builder, selector 
 		return err
 	}
 	nullCase, defaultCase := -1, -1
-	requiresMatch := isExpression || (reference && selectorType != javaStringType && !legacySwitchInteger(primitive))
+	selectorClass := ctx.program.classes[selectorType]
+	enumSelector := selectorClass != nil && selectorClass.isEnum()
+	requiresMatch := isExpression || (reference && selectorType != javaStringType && !legacySwitchInteger(primitive) && !enumSelector)
 	var matches strings.Builder
 	for index, arm := range cases {
 		if arm.Pattern && len(arm.Patterns) == 0 {
@@ -133,7 +135,13 @@ func (ctx javaObjectContext) emitJavaSwitchMatch(out *strings.Builder, selector 
 				continue
 			}
 			var match string
-			if selectorType == javaStringType {
+			if field, found := ctx.program.fields[label.Symbol]; found && field.declaration.EnumConstant {
+				value, err := ctx.enumSwitchMatch(selectorType, field)
+				if err != nil {
+					return err
+				}
+				match = value
+			} else if selectorType == javaStringType {
 				labelValue, err := ctx.converted(label, javaStringType)
 				if err != nil {
 					return err

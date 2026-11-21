@@ -81,7 +81,7 @@ func (class *javaObjectClass) staticGuardName() string {
 }
 
 func (field javaObjectField) staticStorage() string {
-	return field.class.storageName("javaStaticField_" + field.class.goTypeName() + "_" + field.declaration.Name)
+	return field.class.storageName("javaStaticField_" + field.class.goTypeName() + "_" + field.staticFieldName())
 }
 
 func (field javaObjectField) staticAccessor(operation string) string {
@@ -89,7 +89,14 @@ func (field javaObjectField) staticAccessor(operation string) string {
 	if javaStaticObservable(field.declaration) && !(operation == "Set" && slices.Contains(field.declaration.Modifiers, "FINAL")) {
 		prefix = "Gpp"
 	}
-	return prefix + operation + "Static_" + field.class.goTypeName() + "_" + field.declaration.Name
+	return prefix + operation + "Static_" + field.class.goTypeName() + "_" + field.staticFieldName()
+}
+
+func (field javaObjectField) staticFieldName() string {
+	if field.declaration.EnumConstant {
+		return enumConstantGoName(field.declaration.Name)
+	}
+	return field.declaration.Name
 }
 
 func (program *javaObjectProgram) addStaticField(class *javaObjectClass, declaration Occurrence) error {
@@ -119,7 +126,7 @@ func (program *javaObjectProgram) addStaticField(class *javaObjectClass, declara
 }
 
 func (program *javaObjectProgram) layoutStaticInitialization(class *javaObjectClass) error {
-	class.activeInitialization = len(class.staticInitializers) != 0 || class.hasAssertions ||
+	class.activeInitialization = class.isEnum() || len(class.staticInitializers) != 0 || class.hasAssertions ||
 		(class.parent != nil && class.parent.activeInitialization)
 	for _, iface := range class.interfaces {
 		class.activeInitialization = class.activeInitialization || iface.hasAssertions
@@ -138,6 +145,9 @@ func (program *javaObjectProgram) classInitialization(class *javaObjectClass) st
 }
 
 func (program *javaObjectProgram) emitStaticClass(out *strings.Builder, class *javaObjectClass) error {
+	if class.isEnum() {
+		fmt.Fprintf(out, "\nvar %s *javart.Array\n", class.enumValuesStorage())
+	}
 	if class.activeInitialization {
 		if err := program.emitStaticGuard(out, class); err != nil {
 			return err
@@ -175,6 +185,11 @@ func (program *javaObjectProgram) emitStaticGuard(out *strings.Builder, class *j
 		}
 	}
 	var body strings.Builder
+	if class.isEnum() {
+		if err := ctx.emitEnumInitialization(&body); err != nil {
+			return unsupportedSource(class.file, class.declaration, err.Error())
+		}
+	}
 	for _, initializer := range class.staticInitializers {
 		if initializer.Kind == "BLOCK" {
 			body.WriteString("\t{\n")
@@ -215,7 +230,9 @@ func (program *javaObjectProgram) emitStaticField(out *strings.Builder, field ja
 	}
 	fmt.Fprintf(out, "\nvar %s %s\n", storage, goType)
 	fmt.Fprintf(out, "\nfunc %s() %s { %sreturn %s }\n", field.class.storageName(get), goType, guard, storage)
-	fmt.Fprintf(out, "\nfunc %s(value %s) { %s%s = value }\n", field.class.storageName(set), goType, guard, storage)
+	if !field.declaration.EnumConstant {
+		fmt.Fprintf(out, "\nfunc %s(value %s) { %s%s = value }\n", field.class.storageName(set), goType, guard, storage)
+	}
 }
 
 func (program *javaObjectProgram) emitStaticMethod(out *strings.Builder, method *javaObjectMethod, facade string) error {
@@ -242,10 +259,12 @@ func (program *javaObjectProgram) emitStaticMethod(out *strings.Builder, method 
 		if hasTry {
 			ctx.emitJavaReturnBoundary(out, declaration.Result)
 		}
-		if err := ctx.emitPatternStatements(out, declaration.Body, declaration.Result); err != nil {
+		if method.enumImplicit {
+			ctx.emitImplicitEnumMethod(out, method)
+		} else if err := ctx.emitPatternStatements(out, declaration.Body, declaration.Result); err != nil {
 			return err
 		}
-		if declaration.Result != "void" && (hasTry || declaration.Body.containsStatement(isJavaLoop)) {
+		if declaration.Result != "void" && (hasTry || declaration.Body.containsStatement(needsJavaControlFlowTerminal)) {
 			out.WriteString("\tpanic(\"Java method completed without a result\")\n")
 		}
 		out.WriteString("}\n")

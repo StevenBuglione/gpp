@@ -157,13 +157,16 @@ func (program *javaObjectProgram) canConvertReference(source, target string) boo
 	}
 	if target == javaObjectType {
 		return program.classes[source] != nil || program.interfaces[source] != nil || source == javaAutoCloseable ||
-			source == javaRecordType || javaCatchTypes[source] != ""
+			source == javaRecordType || source == javaEnumType || javaCatchTypes[source] != ""
 	}
 	if iface := program.interfaces[source]; iface != nil {
 		return iface.supers[target] != nil || (target == javaAutoCloseable && iface.closeable)
 	}
 	if class := program.classes[source]; class != nil {
 		if class.declaration.Kind == "RECORD" && target == javaRecordType {
+			return true
+		}
+		if class.hasEnumIdentity() && target == javaEnumType {
 			return true
 		}
 		if class.interfaces[target] != nil {

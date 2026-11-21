@@ -1,0 +1,45 @@
+package gpp.java
+
+import "slices"
+
+// Enum is the Go-facing contract for Java enum objects.
+type Enum interface {
+    Name() *String
+    Ordinal() int32
+    ToString() *String
+    GppJavaEnum() string
+}
+
+// EnumValues returns a fresh Java array and preserves the singleton elements.
+func EnumValues(constants *Array) *Array {
+    RequireNonNull(constants)
+    return &Array{arrayType: constants.arrayType, length: constants.length,
+        elements: slices.Clone(constants.elements.([]any))}
+}
+
+func EnumValueOf[T Enum](constants *Array, className string, name *String) T {
+    if constants == nil {
+        Throw(NewIllegalArgumentException(StringFromGo(className + " is not an enum class")))
+    }
+    RequireNonNull(name)
+    for index := int32(0); index < constants.length; index++ {
+        constant := ArrayGet[T](constants, index)
+        if constant.Name().encoded == name.encoded {
+            return constant
+        }
+    }
+    Throw(NewIllegalArgumentException(ConcatStringValue(StringFromGo("No enum constant " + className + "."), name)))
+    panic("Java enum lookup completed without a result")
+}
+
+func EnumEquals(value Enum, other any) bool {
+    return CanonicalReference(value) == CanonicalReference(other)
+}
+
+func EnumCompare(left, right Enum) int32 {
+    RequireNonNull(right)
+    if left.GppJavaEnum() != right.GppJavaEnum() {
+        Throw(&ClassCastException{})
+    }
+    return left.Ordinal() - right.Ordinal()
+}

@@ -79,7 +79,7 @@ func packageHasJavaTypes(files []SourceFile) bool {
 	for _, file := range files {
 		for _, declaration := range file.Declarations {
 			if declaration.Owner == "" && (declaration.Kind == "CLASS" || declaration.Kind == "INTERFACE" ||
-				declaration.Kind == "RECORD" || declaration.Kind == "ANNOTATION_TYPE") {
+				declaration.Kind == "RECORD" || declaration.Kind == "ENUM" || declaration.Kind == "ANNOTATION_TYPE") {
 				return true
 			}
 		}

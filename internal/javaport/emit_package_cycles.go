@@ -83,7 +83,7 @@ func (program javaObjectProgram) emitPackageFacade(name, storage string) (emitte
 		}
 	}
 	for _, class := range program.layout {
-		if class.file.Package != name {
+		if class.file.Package != name || class.enumBase != nil {
 			continue
 		}
 		publicName := class.goTypeName()

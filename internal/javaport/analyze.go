@@ -138,6 +138,7 @@ type Occurrence struct {
 	StaticInitializer        bool             `json:"staticInitializer,omitempty"`
 	ConstructorCall          *JavaExpression  `json:"constructorCall,omitempty"`
 	RecordComponents         []Parameter      `json:"recordComponents,omitempty"`
+	EnumConstant             bool             `json:"enumConstant,omitempty"`
 	CompactRecordConstructor bool             `json:"compactRecordConstructor,omitempty"`
 	VariableArity            bool             `json:"variableArity,omitempty"`
 	Synthetic                bool             `json:"synthetic,omitempty"`

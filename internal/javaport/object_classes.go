@@ -17,6 +17,8 @@ type javaObjectClass struct {
 	parent                 *javaObjectClass
 	enclosing              *javaObjectClass
 	fields                 []Occurrence
+	enumConstants          []Occurrence
+	enumBase               *javaObjectClass
 	initializers           []Occurrence
 	staticInitializers     []Occurrence
 	constructors           []*javaObjectMethod
@@ -44,6 +46,7 @@ type javaObjectMethod struct {
 	crossPackageInit bool
 	defaultMethod    *javaInterfaceMethod
 	recordImplicit   bool
+	enumImplicit     bool
 }
 
 type javaObjectField struct {
@@ -111,7 +114,7 @@ func prepareJavaObjects(files []SourceFile) (*javaObjectProgram, error) {
 			program.exports[file.Package] = map[string]bool{}
 		}
 		for _, declaration := range file.Declarations {
-			if declaration.Nesting == "LOCAL" || declaration.Nesting == "ANONYMOUS" {
+			if declaration.Nesting == "LOCAL" || (declaration.Nesting == "ANONYMOUS" && declaration.Kind != "ENUM") {
 				return nil, unsupportedSource(file, declaration, "local and anonymous Java classes are unsupported")
 			}
 			if declaration.Owner != "" {
@@ -134,18 +137,27 @@ func prepareJavaObjects(files []SourceFile) (*javaObjectProgram, error) {
 				}
 				continue
 			}
-			if declaration.Kind != "CLASS" && declaration.Kind != "RECORD" {
+			if declaration.Kind != "CLASS" && declaration.Kind != "RECORD" && declaration.Kind != "ENUM" {
 				continue
 			}
-			visible := slices.Contains(declaration.Modifiers, "PUBLIC") || permitted[declaration.Symbol] || javaIsSealed(declaration)
-			if !token.IsExported(declaration.Name) || !token.IsIdentifier(declaration.Name) || !visible ||
+			var enumBase *javaObjectClass
+			if declaration.Kind == "ENUM" && declaration.Name == "" {
+				enumBase = program.enumVariantBase(declaration)
+				if enumBase == nil {
+					return nil, unsupportedSource(file, declaration, "unresolved Java enum constant class body")
+				}
+				declaration.Name = "javaEnumVariant_" + enumBase.declaration.Name + strings.TrimPrefix(declaration.Symbol, enumBase.declaration.Symbol+"$")
+			}
+			visible := enumBase != nil || (token.IsExported(declaration.Name) &&
+				(slices.Contains(declaration.Modifiers, "PUBLIC") || permitted[declaration.Symbol] || javaIsSealed(declaration)))
+			if !token.IsIdentifier(declaration.Name) || !visible ||
 				!hasOnlyModifiers(declaration, "PUBLIC", "FINAL", "ABSTRACT", "SEALED", "NON_SEALED") {
 				return nil, unsupportedSource(file, declaration, "expected a public class with at most one superclass")
 			}
 			if program.exports[file.Package][declaration.Name] {
 				return nil, unsupportedSource(file, declaration, "duplicate Go class name")
 			}
-			class := &javaObjectClass{file: file, declaration: declaration, storagePackage: file.Package}
+			class := &javaObjectClass{file: file, declaration: declaration, storagePackage: file.Package, enumBase: enumBase}
 			classes = append(classes, class)
 			program.classes[declaration.Symbol] = class
 			program.exports[file.Package][declaration.Name] = true
@@ -164,10 +176,10 @@ func prepareJavaObjects(files []SourceFile) (*javaObjectProgram, error) {
 	}
 	for _, file := range files {
 		for _, declaration := range file.Declarations {
-			if program.classes[declaration.Symbol] != nil && (declaration.Kind == "CLASS" || declaration.Kind == "RECORD") {
+			if program.classes[declaration.Symbol] != nil && (declaration.Kind == "CLASS" || declaration.Kind == "RECORD" || declaration.Kind == "ENUM") {
 				continue
 			}
-			if (declaration.Kind == "CLASS" || declaration.Kind == "INTERFACE" || declaration.Kind == "RECORD" || declaration.Kind == "ANNOTATION_TYPE") && declaration.Owner == "" {
+			if (declaration.Kind == "CLASS" || declaration.Kind == "INTERFACE" || declaration.Kind == "RECORD" || declaration.Kind == "ENUM" || declaration.Kind == "ANNOTATION_TYPE") && declaration.Owner == "" {
 				continue
 			}
 			owner := declaration.Owner
@@ -208,6 +220,11 @@ func prepareJavaObjects(files []SourceFile) (*javaObjectProgram, error) {
 	for _, class := range classes {
 		if class.declaration.Kind == "RECORD" {
 			if err := program.completeRecord(class); err != nil {
+				return nil, unsupportedSource(class.file, class.declaration, err.Error())
+			}
+		}
+		if class.isEnum() {
+			if err := program.completeEnum(class); err != nil {
 				return nil, unsupportedSource(class.file, class.declaration, err.Error())
 			}
 		}
@@ -269,10 +286,14 @@ func (program *javaObjectProgram) addMember(class *javaObjectClass, declaration 
 			class.initializers = append(class.initializers, declaration)
 		}
 	case "VARIABLE":
-		if program.mappedObjectType(declaration.Type) == "" || !token.IsIdentifier(declaration.Name) {
+		if program.mappedObjectType(declaration.Type) == "" || (!declaration.EnumConstant && !token.IsIdentifier(declaration.Name)) {
 			return fmt.Errorf("unsupported field name or type %s", declaration.Type)
 		}
-		if slices.Contains(declaration.Modifiers, "STATIC") {
+		if declaration.EnumConstant {
+			if err := program.addEnumConstant(class, declaration); err != nil {
+				return err
+			}
+		} else if slices.Contains(declaration.Modifiers, "STATIC") {
 			if err := program.addStaticField(class, declaration); err != nil {
 				return err
 			}
@@ -377,6 +398,9 @@ func (program *javaObjectProgram) layoutClass(class *javaObjectClass) error {
 		if declaration.Kind == "RECORD" && supertype == javaRecordType {
 			continue
 		}
+		if class.isEnum() && (supertype == javaEnumType || strings.HasPrefix(supertype, javaEnumType+"<")) {
+			continue
+		}
 		if supertype == javaAutoCloseable {
 			class.closeable = true
 			continue
@@ -434,6 +458,16 @@ func (program *javaObjectProgram) layoutClass(class *javaObjectClass) error {
 	}
 	if declaration.Kind == "RECORD" && class.virtual["GppJavaRecord"] != nil {
 		return unsupportedSource(class.file, declaration, "Go record marker collides with method GppJavaRecord")
+	}
+	if class.hasEnumIdentity() {
+		for _, name := range []string{"Name", "Ordinal", "GppJavaEnum"} {
+			if class.virtual[name] != nil {
+				return unsupportedSource(class.file, declaration, "Go enum bridge collides with method "+name)
+			}
+		}
+		if method := class.virtual["ToString"]; method != nil && method.declaration.Name != "toString" {
+			return unsupportedSource(class.file, declaration, "Go enum bridge collides with method ToString")
+		}
 	}
 	for _, method := range []string{"GppJavaBindOwner", "GppJavaOwner", "GppJavaCanonicalObject", "GppJavaReferenceView",
 		"GppJavaClassName", "GppJavaIdentityHash", "GppJavaString", "GppJavaHashCode", javaImplementsBridge} {

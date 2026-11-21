@@ -40,7 +40,8 @@ func usesObjectEmitter(files []SourceFile) bool {
 				return true
 			}
 			if declarationHasRuntimeAnnotations(declaration) || declaration.Owner == "" &&
-				(declaration.Kind == "INTERFACE" || declaration.Kind == "RECORD" || declaration.Kind == "ANNOTATION_TYPE" || javaIsSealed(declaration)) {
+				(declaration.Kind == "INTERFACE" || declaration.Kind == "RECORD" || declaration.Kind == "ENUM" ||
+					declaration.Kind == "ANNOTATION_TYPE" || javaIsSealed(declaration)) {
 				return true
 			}
 			if declaration.Kind == "BLOCK" && declaration.StaticInitializer ||
