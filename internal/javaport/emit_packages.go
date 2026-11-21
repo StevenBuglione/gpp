@@ -94,6 +94,7 @@ type emittedObjectPackage struct {
 func (program javaObjectProgram) emitPackage(name string) (emittedObjectPackage, error) {
 	program.pkg = name
 	program.imports = map[string]string{}
+	program.lambdaAdapters = map[string]*javaLambdaAdapter{}
 	var source strings.Builder
 	for _, iface := range program.interfaceLayout {
 		if iface.storagePackage == name {
@@ -110,6 +111,7 @@ func (program javaObjectProgram) emitPackage(name string) (emittedObjectPackage,
 			return emittedObjectPackage{}, err
 		}
 	}
+	program.emitLambdaAdapters(&source)
 	return program.finishPackage(&source)
 }
 

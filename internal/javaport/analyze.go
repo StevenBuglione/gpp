@@ -199,26 +199,29 @@ type JavaSwitchPattern struct {
 }
 
 type JavaExpression struct {
-	Kind      string            `json:"kind"`
-	Type      string            `json:"type"`
-	Name      string            `json:"name,omitempty"`
-	BindingID int64             `json:"bindingId,omitempty"`
-	Operand   *JavaExpression   `json:"operand,omitempty"`
-	Target    *JavaExpression   `json:"target,omitempty"`
-	Left      *JavaExpression   `json:"left,omitempty"`
-	Right     *JavaExpression   `json:"right,omitempty"`
-	Condition *JavaExpression   `json:"condition,omitempty"`
-	WhenTrue  *JavaExpression   `json:"whenTrue,omitempty"`
-	WhenFalse *JavaExpression   `json:"whenFalse,omitempty"`
-	Literal   string            `json:"literal,omitempty"`
-	UTF16LE   *string           `json:"utf16LE,omitempty"`
-	Symbol    string            `json:"symbol,omitempty"`
-	Receiver  string            `json:"receiver,omitempty"`
-	Static    bool              `json:"static,omitempty"`
-	Arguments []*JavaExpression `json:"arguments,omitempty"`
-	Cases     []JavaSwitchCase  `json:"cases,omitempty"`
-	Line      int64             `json:"line"`
-	Column    int64             `json:"column"`
+	Kind       string            `json:"kind"`
+	Type       string            `json:"type"`
+	Name       string            `json:"name,omitempty"`
+	BindingID  int64             `json:"bindingId,omitempty"`
+	Operand    *JavaExpression   `json:"operand,omitempty"`
+	Target     *JavaExpression   `json:"target,omitempty"`
+	Left       *JavaExpression   `json:"left,omitempty"`
+	Right      *JavaExpression   `json:"right,omitempty"`
+	Condition  *JavaExpression   `json:"condition,omitempty"`
+	WhenTrue   *JavaExpression   `json:"whenTrue,omitempty"`
+	WhenFalse  *JavaExpression   `json:"whenFalse,omitempty"`
+	Literal    string            `json:"literal,omitempty"`
+	UTF16LE    *string           `json:"utf16LE,omitempty"`
+	Symbol     string            `json:"symbol,omitempty"`
+	Receiver   string            `json:"receiver,omitempty"`
+	Static     bool              `json:"static,omitempty"`
+	Arguments  []*JavaExpression `json:"arguments,omitempty"`
+	Parameters []Parameter       `json:"parameters,omitempty"`
+	Body       *MethodBody       `json:"body,omitempty"`
+	Result     string            `json:"result,omitempty"`
+	Cases      []JavaSwitchCase  `json:"cases,omitempty"`
+	Line       int64             `json:"line"`
+	Column     int64             `json:"column"`
 }
 
 // TypeDescription preserves the generic structure that a JVM descriptor erases.

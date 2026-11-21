@@ -64,6 +64,8 @@ type javaObjectProgram struct {
 	interfaces        map[string]*javaInterface
 	interfaceLayout   []*javaInterface
 	interfaceMethods  map[string]*javaInterfaceMethod
+	lambdaAdapters    map[string]*javaLambdaAdapter
+	lambdaNext        int
 }
 
 func emitJavaObjects(report Report) (string, error) {

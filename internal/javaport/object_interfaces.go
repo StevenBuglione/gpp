@@ -32,9 +32,12 @@ type javaInterfaceMethod struct {
 }
 
 func (program *javaObjectProgram) addInterface(file SourceFile, declaration Occurrence) error {
+	annotationsSupported := !slices.ContainsFunc(declaration.Annotations, func(annotation Annotation) bool {
+		return annotation.Retention != "SOURCE" && annotation.Type != "java.lang.FunctionalInterface"
+	})
 	if !token.IsExported(declaration.Name) || !token.IsIdentifier(declaration.Name) ||
 		!hasOnlyModifiers(declaration, "PUBLIC", "ABSTRACT") || !slices.Contains(declaration.Modifiers, "PUBLIC") ||
-		!onlySourceAnnotations(declaration) || declaration.HasTypeParams {
+		!annotationsSupported || declaration.HasTypeParams {
 		return fmt.Errorf("expected a public non-generic Java interface")
 	}
 	if program.exports[file.Package][declaration.Name] {

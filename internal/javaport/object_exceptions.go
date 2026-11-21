@@ -90,6 +90,10 @@ func (expression *JavaExpression) containsStatement(matches func(string) bool) b
 	if expression == nil {
 		return false
 	}
+	// A lambda body has its own return, exception and loop boundaries.
+	if expression.Kind == "LAMBDA_EXPRESSION" {
+		return matches("ASSERT") && (expression.Body.containsStatement(matches) || expression.Operand.containsStatement(matches))
+	}
 	if javaSwitchCasesContainStatement(expression.Cases, matches) {
 		return true
 	}

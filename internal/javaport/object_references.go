@@ -3,6 +3,7 @@ package javaport
 import (
 	"fmt"
 	"maps"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -119,6 +120,16 @@ func (program *javaObjectProgram) canConvertReference(source, target string) boo
 	if source == target || source == "null" {
 		return true
 	}
+	if program.supportedIntersection(target) {
+		return !slices.ContainsFunc(splitJavaIntersection(target), func(bound string) bool {
+			return !program.canConvertReference(source, bound)
+		})
+	}
+	if program.supportedIntersection(source) {
+		return slices.ContainsFunc(splitJavaIntersection(source), func(bound string) bool {
+			return program.canConvertReference(bound, target)
+		})
+	}
 	if canWidenBoxingReference(source, target) {
 		return true
 	}
@@ -168,6 +179,9 @@ func (ctx javaObjectContext) convertReference(value, source, target string) (str
 	if source == "null" {
 		return "(" + ctx.program.objectGoType(target) + ")(" + value + ")", nil
 	}
+	if ctx.program.supportedIntersection(target) {
+		return ctx.program.primitiveLowering.canonicalReference(value), nil
+	}
 	if target == javaRecordType {
 		ctx.program.runtime = true
 		return "javart.NormalizeReference[javart.Record](" + value + ")", nil
@@ -198,6 +212,9 @@ func (ctx javaObjectContext) cast(expression *JavaExpression) (string, error) {
 	}
 	if ctx.program.canConvertReference(source, target) {
 		return ctx.converted(expression.Operand, target)
+	}
+	if ctx.program.supportedIntersection(target) {
+		return ctx.castIntersection(expression.Operand, target)
 	}
 	if !ctx.program.referenceType(source) || !ctx.program.referenceType(target) {
 		return "", fmt.Errorf("unsupported Java reference cast from %s to %s", source, target)

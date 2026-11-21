@@ -23,6 +23,7 @@ import com.sun.source.tree.InstanceOfTree;
 import com.sun.source.tree.IfTree;
 import com.sun.source.tree.ImportTree;
 import com.sun.source.tree.LabeledStatementTree;
+import com.sun.source.tree.LambdaExpressionTree;
 import com.sun.source.tree.LiteralTree;
 import com.sun.source.tree.MemberReferenceTree;
 import com.sun.source.tree.MemberSelectTree;
@@ -552,6 +553,42 @@ class JavaSourceAnalysis {
                     var target = new TreePath(new TreePath(path, callee), selector.getExpression());
                     attributes += ",\"target\":" + executableExpression(target);
                 }
+            } else if (tree instanceof LambdaExpressionTree lambda) {
+                attributes += ",\"parameters\":[" + lambda.getParameters().stream()
+                    .map(parameter -> {
+                        var parameterPath = new TreePath(path, parameter);
+                        var element = trees.getElement(parameterPath);
+                        return "{\"name\":" + quote(parameter.getName().toString()) +
+                            ",\"type\":" + quote(expressionType(element == null ? null : element.asType())) + "}";
+                    }).collect(Collectors.joining(",")) + "]";
+                var bodyPath = new TreePath(path, lambda.getBody());
+                if (lambda.getBody() instanceof BlockTree block) {
+                    attributes += ",\"body\":" + bodyRecord(bodyPath, block.getStatements());
+                } else {
+                    attributes += ",\"operand\":" + executableExpression(bodyPath);
+                }
+            } else if (tree instanceof MemberReferenceTree reference) {
+                var qualifier = reference.getQualifierExpression();
+                var qualifierPath = new TreePath(path, qualifier);
+                var qualifierType = trees.getTypeMirror(qualifierPath);
+                var selected = trees.getElement(path);
+                var result = selected instanceof ExecutableElement method ? method.getReturnType() : null;
+                String form = receiver(path, qualifier);
+                if (reference.getMode() == MemberReferenceTree.ReferenceMode.NEW) {
+                    form = qualifierType instanceof ArrayType ? "array-constructor" : "constructor";
+                    result = qualifierType;
+                } else if (form.equals("type")) {
+                    form = selected != null && selected.getModifiers().contains(Modifier.STATIC) ? "static" : "unbound";
+                } else if (qualifier instanceof MemberSelectTree member && member.getIdentifier().contentEquals("super")) {
+                    form = "interface-super";
+                } else if (form.equals("other")) {
+                    form = "bound";
+                }
+                attributes += ",\"symbol\":" + quote(symbol(selected)) + ",\"receiver\":" + quote(form) +
+                    ",\"result\":" + quote(expressionType(result));
+                if (form.equals("bound")) {
+                    attributes += ",\"target\":" + executableExpression(qualifierPath);
+                }
             } else if (tree instanceof NewClassTree call) {
                 if (call.getEnclosingExpression() == null && call.getClassBody() == null) {
                     attributes += ",\"symbol\":" + quote(symbol(trees.getElement(path))) +
@@ -628,6 +665,9 @@ class JavaSourceAnalysis {
         private String expressionType(TypeMirror type) {
             if (type == null) {
                 return "";
+            }
+            if (type instanceof IntersectionType intersection) {
+                return intersection.getBounds().stream().map(this::expressionType).collect(Collectors.joining(" & "));
             }
             if (type instanceof DeclaredType declared && declared.asElement() instanceof TypeElement element) {
                 return elements.getBinaryName(element).toString();

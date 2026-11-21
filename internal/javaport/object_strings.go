@@ -22,6 +22,9 @@ func (program *javaObjectProgram) objectGoType(javaType string) string {
 }
 
 func (program *javaObjectProgram) mappedObjectType(javaType string) string {
+	if program.supportedIntersection(javaType) {
+		return "any"
+	}
 	if goType := boxingGoType(javaType); goType != "" {
 		return goType
 	}

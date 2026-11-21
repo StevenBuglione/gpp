@@ -129,18 +129,19 @@ func (class *javaObjectClass) checkedResultName() string {
 }
 
 type javaObjectContext struct {
-	program   *javaObjectProgram
-	class     *javaObjectClass
-	iface     *javaInterface
-	static    bool
-	arguments map[string]string
-	caught    map[string]string
-	locals    map[string]string
-	tryScope  *javaTryBranches
-	control   *javaControlTarget
-	controlID *int
-	yield     *javaYieldTarget
-	patterns  map[int64]string
+	program        *javaObjectProgram
+	class          *javaObjectClass
+	iface          *javaInterface
+	static         bool
+	arguments      map[string]string
+	caught         map[string]string
+	locals         map[string]string
+	tryScope       *javaTryBranches
+	control        *javaControlTarget
+	controlID      *int
+	yield          *javaYieldTarget
+	patterns       map[int64]string
+	lambdaCaptures *javaLambdaCaptures
 }
 
 func (ctx javaObjectContext) emitConstructor(out *strings.Builder, method *javaObjectMethod) error {
@@ -415,22 +416,34 @@ func (ctx javaObjectContext) expression(expression *JavaExpression) (string, err
 	switch expression.Kind {
 	case "THIS":
 		return "this", nil
+	case "IDENTIFIER":
+		if name, found := ctx.arguments[expression.Name]; found {
+			return ctx.lambdaCaptures.resolve(name), nil
+		}
+		return "", fmt.Errorf("unsupported expression IDENTIFIER at %d:%d", expression.Line, expression.Column)
 	case "LOCAL_VARIABLE":
 		if name, found := ctx.locals[expression.Name]; found {
-			return name, nil
+			return ctx.lambdaCaptures.resolve(name), nil
 		}
 		return "", fmt.Errorf("cannot use Java local %s", expression.Name)
 	case "BINDING_VARIABLE":
+		if name := javaPatternName(expression.BindingID); ctx.lambdaCaptures.has(name) {
+			return ctx.lambdaCaptures.resolve(name), nil
+		}
 		return ctx.patternSlot(expression.BindingID, expression.Type)
 	case "CATCH_PARAMETER":
 		if name, found := ctx.caught[expression.Name]; found {
-			return name, nil
+			return ctx.lambdaCaptures.resolve(name), nil
 		}
 		return "", fmt.Errorf("cannot use caught parameter %s", strings.TrimSpace(expression.Name))
 	case "FIELD":
 		return ctx.field(expression)
 	case "METHOD_INVOCATION":
 		return ctx.invoke(expression)
+	case "LAMBDA_EXPRESSION":
+		return ctx.lambda(expression)
+	case "MEMBER_REFERENCE":
+		return ctx.methodReference(expression)
 	case "NEW_CLASS":
 		if expression.Symbol == "java.lang.Object#<init>()" {
 			ctx.program.runtime = true
