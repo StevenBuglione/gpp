@@ -36,3 +36,36 @@ jobs:
 
       - name: Smoke test every example in a fresh project
         run: ./scripts/smoke-examples.sh
+
+      - name: Check Go interoperability without Java
+        run: ./scripts/check-go-interop.sh
+
+  java-analysis:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        java: ['17', '27']
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up reference JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+
+      - name: Check typed Java migration analysis
+        env:
+          GPP_TEST_JAVA: java
+          GPP_TEST_JAVA_RELEASE: ${{ matrix.java }}
+        run: go test ./internal/javaport
+
+      - name: Check the JVM extension callback prototype
+        run: ./scripts/check-jvm-interop.sh

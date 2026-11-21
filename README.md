@@ -148,7 +148,7 @@ brew upgrade --fetch-HEAD telgatech/gpp/gpp</code></pre></li>
 It provides one `gpp` executable with project commands:
 
 ```text
-gpp init|compile|build|run|clean|fmt|fiximports|test|doc|env|doctor|version|lsp
+gpp init|compile|build|run|clean|fmt|fiximports|test|doc|env|doctor|version|lsp|migrate
 ```
 
 Create and run a starter project:

@@ -1,0 +1,30 @@
+package interop
+
+import "strings"
+
+embed Label "library/label.txt"
+
+class Entry {
+    Value string
+
+    func Message() string {
+        return strings.TrimSpace(string(Label)) + ": " + NativeName(this.Value)
+    }
+}
+
+func NewEntry(value string) *Entry {
+    return Entry(value)
+}
+
+func Identity(entry *Entry) *Entry {
+    return entry
+}
+
+func Collect[T any](first T, rest ...T) []T {
+    return append([]T{first}, rest...)
+}
+
+func Lookup(name string) (string, error) {
+    value, err := NativeLookup(name)
+    return value, err
+}

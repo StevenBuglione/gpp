@@ -99,6 +99,8 @@ func Run(args []string) int {
 		return runVersion(commandArgs)
 	case "lsp":
 		return runLSP(commandArgs)
+	case "migrate":
+		return runMigrate(commandArgs)
 	case "compile":
 		return runCompile(commandArgs)
 	case "help", "-h", "--help":
@@ -139,6 +141,7 @@ func printHelp() {
 	fmt.Println("    doctor     diagnose the toolchain")
 	fmt.Println("    version    show version information")
 	fmt.Println("    lsp        start the Language Server Protocol service")
+	fmt.Println("    migrate    analyze or translate Java source")
 }
 
 func commandHelp(name string) int {
@@ -188,6 +191,15 @@ func commandHelp(name string) int {
 		fmt.Println("Usage: gpp version")
 	case "lsp":
 		fmt.Println("Usage: gpp lsp [--log[=path]]")
+	case "migrate":
+		fmt.Println("Usage: gpp migrate java --analyze [options] <file.java|directory> ...")
+		fmt.Println("       gpp migrate java --emit-gpp [options] <file.java> ...")
+		fmt.Println("       gpp migrate java --analyze [--java path] --inputs manifest.json")
+		fmt.Println("  --release version    Java source version (default: 17)")
+		fmt.Println("  --class-path paths   Java compiler classpath")
+		fmt.Println("  --module-path paths  Java compiler module path")
+		fmt.Println("  --enable-preview     enable previews matching the JDK and release")
+		fmt.Println("  --java path          launcher from a JDK (default: java on PATH)")
 	default:
 		fatalf("unknown command %q; run `gpp --help` for usage", name)
 		return 2
@@ -532,9 +544,10 @@ func runTest(args []string) int {
 
 func compileSources(sources []string, options compileFlags, clean bool, includeTests bool, selections ...testSelectionResult) (buildCacheState, error) {
 	state := buildCacheState{}
+	projectRoot := sourceProjectRoot(sources)
 	cacheable := clean && !includeTests
 	if cacheable {
-		key, err := buildInputKey(sources, options, selections...)
+		key, err := buildInputKey(sources, projectRoot, options, selections...)
 		if err != nil {
 			return state, err
 		}
@@ -555,7 +568,7 @@ func compileSources(sources []string, options compileFlags, clean bool, includeT
 	if !state.Hit {
 		if err := compiler.CompileFilesWithOptions(sources, options.output, compiler.CompileOptions{
 			ModulePath:        options.module,
-			ProjectRoot:       sourceProjectRoot(sources),
+			ProjectRoot:       projectRoot,
 			Development:       options.development,
 			NoPrelude:         options.noPrelude,
 			NoStdlib:          options.noStdlib,

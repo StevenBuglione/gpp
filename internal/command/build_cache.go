@@ -22,7 +22,7 @@ import (
 )
 
 // Bump this when compiler output or cache input discovery changes.
-const buildCacheSchema = 14
+const buildCacheSchema = 15
 
 var errBuildCacheUncacheable = errors.New("build inputs cannot be fingerprinted safely")
 
@@ -56,11 +56,12 @@ type buildCacheState struct {
 	Warn []string
 }
 
-func buildInputKey(sources []string, options compileFlags, selections ...testSelectionResult) (string, error) {
+func buildInputKey(sources []string, projectRoot string, options compileFlags, selections ...testSelectionResult) (string, error) {
 	h := sha256.New()
 	writeHashPart(h, fmt.Sprintf("schema=%d", buildCacheSchema))
 	writeHashPart(h, "compiler="+gppVersion())
 	writeHashPart(h, "module="+options.module)
+	writeHashPart(h, "project-root="+projectRoot)
 	writeHashPart(h, fmt.Sprintf("no-prelude=%t", options.noPrelude))
 	writeHashPart(h, fmt.Sprintf("no-stdlib=%t", options.noStdlib))
 	writeHashPart(h, fmt.Sprintf("development=%t", options.development))
@@ -86,7 +87,7 @@ func buildInputKey(sources []string, options compileFlags, selections ...testSel
 		if err := hashFile(h, absolute); err != nil {
 			return "", err
 		}
-		if err := hashSourceEmbeds(h, absolute, options.output); err != nil {
+		if err := hashSourceEmbeds(h, absolute, projectRoot, options.output); err != nil {
 			if errors.Is(err, errBuildCacheUncacheable) {
 				return "", nil
 			}
@@ -134,7 +135,7 @@ func buildInputKey(sources []string, options compileFlags, selections ...testSel
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-func hashSourceEmbeds(h hash.Hash, source, parseCacheDir string) error {
+func hashSourceEmbeds(h hash.Hash, source, projectRoot, parseCacheDir string) error {
 	data, err := os.ReadFile(source)
 	if err != nil {
 		return err
@@ -150,10 +151,6 @@ func hashSourceEmbeds(h hash.Hash, source, parseCacheDir string) error {
 		// don't cache when embed inputs cannot be discovered safely.
 		return errBuildCacheUncacheable
 	}
-	root := nearestModuleRoot(filepath.Dir(source))
-	if root == "" {
-		root = filepath.Dir(source)
-	}
 	for _, declaration := range file.Decls {
 		embed, ok := declaration.(*compiler.EmbedDecl)
 		if !ok {
@@ -167,7 +164,7 @@ func hashSourceEmbeds(h hash.Hash, source, parseCacheDir string) error {
 			if cleanPath == "." || cleanPath == ".." || strings.HasPrefix(cleanPath, ".."+string(filepath.Separator)) {
 				continue
 			}
-			path := filepath.Join(root, cleanPath)
+			path := filepath.Join(projectRoot, cleanPath)
 			writeHashPart(h, "embed="+filepath.ToSlash(path))
 			if item.Directory {
 				if err := hashDirectory(h, path); err != nil {

@@ -78,6 +78,42 @@ should not have to track down the corresponding generated file yourself. If a
 diagnostic points to the wrong line or only points into generated Go, please
 raise a ticket with the source and full error output so it can be fixed.
 
+## Java migration analysis
+
+Use a JDK that supports the Java source release you are analyzing.
+
+```bash
+gpp migrate java --analyze --release 17 --class-path "$COMPILE_CLASSPATH" src/main/java
+```
+
+The versioned JSON report records source declarations, javac-selected call
+targets, and source diagnostics. Source offsets use UTF-16 code units.
+The command exits with status 1 when javac reports source errors. It only
+reads analysis inputs and consumes generated Java sources from your build.
+
+For the pinned Spring builds, set `JAVA_HOME` to JDK 25 and capture the
+Java 17 source sets and classpaths from Gradle before running the analyzer.
+
+```bash
+./scripts/check-spring-reference.sh framework /tmp/gpp-spring-framework
+./scripts/check-spring-reference.sh boot /tmp/gpp-spring-boot
+gpp migrate java --analyze --java "$JAVA_HOME/bin/java" \
+  --inputs /tmp/gpp-spring-framework/spring-core/build/gpp-reference/compileJava.json
+```
+
+Each checkout's Gradle wrapper compiles the reference modules and prints
+the manifest paths it writes. Use a fresh destination or reuse a clean
+checkout at the script's pinned revision.
+
+Use `--emit-gpp` to translate public standalone Java interfaces with
+primitive method signatures, integer or boolean constants, and inheritance\nwithin the selected package. Generated Go marker methods preserve explicit\ninterface membership for derived Java interfaces. The emitter
+preserves Java numeric widths and emits normal Go-compatible method sets.
+Unsupported declarations produce source diagnostics before any output.
+
+```bash
+gpp migrate java --emit-gpp --release 17 /path/to/Ordered.java /path/to/PriorityOrdered.java
+```
+
 ## Developing this documentation site
 
 Install the documentation dependencies and start VitePress:

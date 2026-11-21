@@ -1,0 +1,9 @@
+import (
+    "fmt"
+
+    "example.com/gpp-interop-library/interop"
+)
+
+func main() {
+    fmt.Println(interop.NewEntry(" Ada ").Message())
+}

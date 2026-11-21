@@ -1,0 +1,39 @@
+import groovy.json.JsonOutput
+import org.gradle.api.tasks.compile.JavaCompile
+
+gradle.beforeProject { project ->
+    project.plugins.withId("java") {
+        def compilers = project.tasks.withType(JavaCompile).matching {
+            it.name ==~ /compileJava(?:[0-9]+Java)?/
+        }
+        project.tasks.register("gppReferenceInputs") {
+            group = "verification"
+            description = "Capture inputs for GPP's Spring source analysis."
+            dependsOn(compilers)
+            doLast {
+                compilers.sort { it.name }.each { task ->
+                    def compilerOptions = task.options
+                    def sourceFiles = task.source.files.findAll { it.isFile() && it.name.endsWith(".java") }
+                    def generated = compilerOptions.generatedSourceOutputDirectory.orNull?.asFile
+                    if (generated?.isDirectory()) {
+                        sourceFiles.addAll(project.fileTree(generated) { include("**/*.java") }.files)
+                    }
+                    def release = compilerOptions.release.orNull ?: Integer.parseInt(task.targetCompatibility)
+                    def output = project.layout.buildDirectory.file("gpp-reference/${task.name}.json").get().asFile
+                    output.parentFile.mkdirs()
+                    output.setText(JsonOutput.prettyPrint(JsonOutput.toJson([
+                        schemaVersion: 1,
+                        project: project.path,
+                        release: release,
+                        preview: "--enable-preview" in compilerOptions.compilerArgs,
+                        classPath: task.classpath.files.collect { it.absolutePath },
+                        sources: sourceFiles.collect { it.absolutePath }.sort(),
+                        compilerArgs: compilerOptions.compilerArgs,
+                        encoding: compilerOptions.encoding
+                    ])) + "\n", "UTF-8")
+                    logger.lifecycle("GPP Java inputs: ${output}")
+                }
+            }
+        }
+    }
+}
