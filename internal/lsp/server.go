@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime/debug"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1049,6 +1050,9 @@ func (w *workspaceState) appendSymbol(result *[]symbolInfo, seen map[string]bool
 	for _, field := range symbol.Fields {
 		child := compiler.DocSymbol{Kind: compiler.DocField, Name: field.Name, FullName: symbol.FullName + "." + field.Name, Package: symbol.Package, Parent: symbol.Name, Doc: field.Doc, Signature: field.Name + " " + field.Type, Exported: exportedName(field.Name), SourceFile: symbol.SourceFile, SourceLine: symbol.SourceLine}
 		w.appendSymbol(result, seen, child)
+	}
+	for _, field := range symbol.StaticFields {
+		w.appendSymbol(result, seen, field)
 	}
 	for _, child := range symbol.Methods {
 		w.appendSymbol(result, seen, child)
@@ -2870,7 +2874,7 @@ func (s *server) classMembersForType(state *fileState, typeName, memberName stri
 		if memberName != "" && info.Symbol.Name != memberName || !isClassMemberKind(info.Symbol.Kind) {
 			return
 		}
-		if info.Symbol.Kind == compiler.DocField && static {
+		if info.Symbol.Kind == compiler.DocField && info.Symbol.StaticField != static {
 			return
 		}
 		if info.Symbol.Kind == compiler.DocMethod && s.methodIsStatic(info) != static {
@@ -5867,7 +5871,7 @@ func (s *server) isNonGenericDeclaration(state *fileState, name string, offset i
 					}
 				}
 			}
-			for _, field := range value.Fields {
+			for _, field := range classDeclarationFields(value) {
 				if field.Name == name && firstIdentifierInSpan(state.File.Tokens, field.SpanValue).Start == offset {
 					return true
 				}
@@ -6000,6 +6004,12 @@ func (s *server) documentSymbol(symbol compiler.DocSymbol) DocumentSymbol {
 		child := compiler.DocSymbol{Kind: compiler.DocField, Name: field.Name, FullName: symbol.FullName + "." + field.Name, Package: symbol.Package, Parent: symbol.Name, Signature: field.Name + " " + field.Type, SourceFile: symbol.SourceFile}
 		result.Children = append(result.Children, s.documentSymbol(child))
 	}
+	for _, field := range symbol.StaticFields {
+		result.Children = append(result.Children, s.documentSymbol(field))
+	}
+	if symbol.Constant {
+		result.Kind = 14 // LSP SymbolKindConstant
+	}
 	for _, method := range append(append([]compiler.DocSymbol{}, symbol.Methods...), symbol.Static...) {
 		result.Children = append(result.Children, s.documentSymbol(method))
 	}
@@ -6008,6 +6018,10 @@ func (s *server) documentSymbol(symbol compiler.DocSymbol) DocumentSymbol {
 		result.Children = append(result.Children, s.documentSymbol(child))
 	}
 	return result
+}
+
+func classDeclarationFields(class *compiler.ClassDecl) []compiler.Field {
+	return slices.Concat(class.Fields, class.StaticFields)
 }
 
 func astSymbolDeclarationSpan(file *compiler.File, symbol compiler.DocSymbol) (compiler.Span, bool) {
@@ -6023,7 +6037,7 @@ func astSymbolDeclarationSpan(file *compiler.File, symbol compiler.DocSymbol) (c
 			if symbol.Parent != value.Name {
 				continue
 			}
-			for _, field := range value.Fields {
+			for _, field := range classDeclarationFields(value) {
 				if symbol.Kind == compiler.DocField && field.Name == symbol.Name {
 					return field.Span(), true
 				}
@@ -6414,7 +6428,7 @@ func astSymbolNameSpanInDecl(file *compiler.File, declaration compiler.Decl, sym
 		if symbol.Parent != value.Name {
 			return compiler.Span{}, false
 		}
-		for _, field := range value.Fields {
+		for _, field := range classDeclarationFields(value) {
 			if symbol.Kind == compiler.DocField && field.Name == symbol.Name {
 				return identifierSpanWithin(file, field.Span(), field.Name)
 			}
@@ -6941,6 +6955,10 @@ func declarationLineMatches(line string, symbol compiler.DocSymbol) bool {
 		return strings.HasPrefix(trimmed, "template ")
 	}
 	if symbol.Kind == compiler.DocField {
+		if symbol.StaticField {
+			trimmed = strings.TrimSpace(strings.TrimPrefix(trimmed, "static "))
+			trimmed = strings.TrimSpace(strings.TrimPrefix(trimmed, "const "))
+		}
 		return identifierAtLineStart(trimmed, symbol.Name)
 	}
 	return strings.Contains(trimmed, symbol.Name)

@@ -253,7 +253,7 @@ func validateStaticFieldOrder(class *ClassDecl) error {
 		field := &class.StaticFields[index]
 		declared[field.Name] = field
 	}
-	for _, item := range staticInitializerOrder(class) {
+	for _, item := range classInitializerOrder(class.StaticFields, class.StaticInitializers) {
 		var problem error
 		visit := classFieldVisitor(func(use classFieldUse) {
 			field, exists := declared[use.name.Name]
@@ -288,7 +288,7 @@ func bindImplicitClassMembers(method Method, class *ClassDecl, context construct
 	}
 	classes := classesForClass(context, class)
 	staticMethods := context.StaticMethodSignatures[class.Name]
-	if len(staticMethods) == 0 && !needsClassInitialization(class, classes, map[*ClassDecl]bool{}) {
+	if len(staticMethods) == 0 && !classHasStaticFields(class, classes, map[*ClassDecl]bool{}) {
 		return method, nil
 	}
 	scope := newFieldLocalScope(nil)

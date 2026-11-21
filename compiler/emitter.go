@@ -1976,6 +1976,9 @@ func emitClass(out *strings.Builder, file *File, class *ClassDecl, context const
 		}
 		methods = append(methods, body)
 	}
+	if err := emitClassConstants(out, class, context, sourcePath); err != nil {
+		return err
+	}
 	if err := emitStaticInitialization(out, class, classes, context, sourcePath, interpolationName); err != nil {
 		return err
 	}

@@ -46,25 +46,28 @@ type DocValueInfo struct {
 }
 
 type DocSymbol struct {
-	Kind        DocKind        `json:"kind"`
-	Name        string         `json:"name"`
-	FullName    string         `json:"fullName"`
-	Package     string         `json:"package"`
-	Parent      string         `json:"parent,omitempty"`
-	Target      string         `json:"target,omitempty"`
-	Doc         string         `json:"doc,omitempty"`
-	Signature   string         `json:"signature,omitempty"`
-	Source      string         `json:"source,omitempty"`
-	SourceFile  string         `json:"sourceFile,omitempty"`
-	SourceLine  int            `json:"sourceLine,omitempty"`
-	Exported    bool           `json:"exported"`
-	Generated   bool           `json:"generated,omitempty"`
-	Parents     []string       `json:"parents,omitempty"`
-	Fields      []DocFieldInfo `json:"fields,omitempty"`
-	Methods     []DocSymbol    `json:"methods,omitempty"`
-	Static      []DocSymbol    `json:"staticMethods,omitempty"`
-	Values      []DocValueInfo `json:"values,omitempty"`
-	Annotations []string       `json:"annotations,omitempty"`
+	Kind         DocKind        `json:"kind"`
+	Name         string         `json:"name"`
+	FullName     string         `json:"fullName"`
+	Package      string         `json:"package"`
+	Parent       string         `json:"parent,omitempty"`
+	Target       string         `json:"target,omitempty"`
+	Doc          string         `json:"doc,omitempty"`
+	Signature    string         `json:"signature,omitempty"`
+	Source       string         `json:"source,omitempty"`
+	SourceFile   string         `json:"sourceFile,omitempty"`
+	SourceLine   int            `json:"sourceLine,omitempty"`
+	Exported     bool           `json:"exported"`
+	Generated    bool           `json:"generated,omitempty"`
+	Parents      []string       `json:"parents,omitempty"`
+	Fields       []DocFieldInfo `json:"fields,omitempty"`
+	StaticFields []DocSymbol    `json:"staticFields,omitempty"`
+	StaticField  bool           `json:"staticField,omitempty"`
+	Constant     bool           `json:"constant,omitempty"`
+	Methods      []DocSymbol    `json:"methods,omitempty"`
+	Static       []DocSymbol    `json:"staticMethods,omitempty"`
+	Values       []DocValueInfo `json:"values,omitempty"`
+	Annotations  []string       `json:"annotations,omitempty"`
 }
 
 type DocPackageInfo struct {
@@ -125,6 +128,9 @@ func (index *DocIndex) add(symbol DocSymbol) {
 	}
 	for _, method := range append(append([]DocSymbol{}, symbol.Methods...), symbol.Static...) {
 		index.add(method)
+	}
+	for _, field := range symbol.StaticFields {
+		index.add(field)
 	}
 	for _, field := range symbol.Fields {
 		index.add(DocSymbol{
@@ -212,6 +218,20 @@ func documentationSymbols(packageName string, declaration Decl) []DocSymbol {
 		}
 		for _, field := range value.Fields {
 			symbol.Fields = append(symbol.Fields, DocFieldInfo{Name: field.Name, Type: fieldTypeSource(field), Doc: field.Doc, Annotations: formatAnnotationUses(field.Annotations)})
+		}
+		for _, field := range value.StaticFields {
+			signature := "static "
+			if field.IsConstant {
+				signature += "const "
+			}
+			signature += field.Name + " " + fieldTypeSource(field)
+			symbol.StaticFields = append(symbol.StaticFields, DocSymbol{
+				Kind: DocField, Name: field.Name, FullName: symbol.FullName + "." + field.Name,
+				Package: packageName, Parent: value.Name, Signature: signature, Doc: field.Doc,
+				StaticField: true, Constant: field.IsConstant, Exported: memberVisibleToCallers(field.Name),
+				SourceFile: value.SourceFile, SourceLine: field.Span().Line,
+				Annotations: formatAnnotationUses(field.Annotations),
+			})
 		}
 		for _, method := range value.Methods {
 			member := documentationMethod(packageName, value.Name, method, value.SourceFile, value.SourceLine)

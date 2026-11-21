@@ -595,8 +595,8 @@ class Defaults {
 ```
 
 Static storage starts with the Go zero value. The first GPP constructor call,
-static method invocation, or class-qualified field read or write initializes
-the declaring class. Parent classes initialize before the class's own fields
+static method invocation, or mutable static field read or write initializes the
+declaring class. Parent classes initialize before the class's own fields
 and blocks, which run in source order. Access through a subclass to an
 inherited member initializes its declaring class. Class literals and native
 Go struct literals are passive.
@@ -627,8 +627,32 @@ Reading a later field by simple name, or reading the field being initialized
 by simple name, is a compile-time error. A class-qualified reference can
 observe the field's current value during initialization.
 
-Compile-time constant fields, interface initialization, and static field
-annotation metadata require additional Java compatibility work.
+## Class constants
+
+Use `static const Name Type = expression` to declare a typed class constant.
+
+```go
+class Defaults {
+    static const Port int = 8080
+    static const Scheme string = "http"
+    static const Address string = Scheme + "://localhost"
+}
+```
+
+Constants are available by simple name in the declaring class and by
+qualified name through a class or subclass. Their initializer uses Go
+constant expression rules and may reference other constants. The compiler
+rejects simple-name self-references and forward reads. A qualified forward
+reference is valid when the constant dependencies are acyclic.
+
+Reading a constant leaves the class uninitialized, including when read
+through a subclass or after an initializer has failed. Go can use exported
+class constants as ordinary typed constants, for example
+`GppConst_Defaults_Port`.
+
+Runtime-initialized final fields, Java-specific constant folding, interface
+initialization, and static field annotation metadata require additional
+compatibility work.
 
 ---
 

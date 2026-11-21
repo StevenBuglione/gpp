@@ -1230,6 +1230,14 @@ func parseClassBody(class *ClassDecl, body string, sourceBase int, fullSource st
 				return fmt.Errorf("class %s: static requires a field, method or initializer block", class.Name)
 			}
 		}
+		constant := static && keywordAt(body, pos, "const")
+		if constant {
+			constantSpan := sourceSpan(fullSource, sourceBase+pos, sourceBase+pos+len("const"))
+			pos = skipSpace(body, pos+len("const"))
+			if pos == len(body) || body[pos] == '{' || keywordAt(body, pos, "func") {
+				return diagnosticAt(class.SourceFile, constantSpan, fmt.Errorf("static const requires a field declaration"))
+			}
+		}
 		if body[pos] == '{' {
 			close, err := findMatchingBrace(body, pos)
 			if err != nil {
@@ -1283,6 +1291,7 @@ func parseClassBody(class *ClassDecl, body string, sourceBase int, fullSource st
 				)
 			}
 			field.Doc = doc
+			field.IsConstant = constant
 			fieldStart := sourceBase + pos
 			fieldLine, fieldColumn := sourcePosition(fullSource, fieldStart)
 			field.SpanValue = Span{Start: fieldStart, End: sourceBase + end, Line: fieldLine, Column: fieldColumn}
@@ -1903,7 +1912,8 @@ func parseExtend(src string, start int) (*ExtendDecl, int, error) {
 	if err := parseClassBody(container, src[bodyOpen+1:close], bodyOpen+1, src); err != nil {
 		return nil, 0, err
 	}
-	if len(container.Fields) > 0 {
+	if len(container.Fields) != 0 || len(container.StaticFields) != 0 ||
+		len(container.InstanceInitializers) != 0 || len(container.StaticInitializers) != 0 {
 		return nil, 0, fmt.Errorf("extension declarations may contain methods only")
 	}
 	targetAST := make([]TypeNode, 0, len(targets))

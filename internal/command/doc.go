@@ -276,6 +276,15 @@ func renderDocSymbol(symbol compiler.DocSymbol, options docOptions) string {
 			fmt.Fprintf(&out, "    %s\n", method.Signature)
 		}
 	}
+	if len(symbol.StaticFields) > 0 {
+		out.WriteString("\nStatic Fields:\n")
+		for _, field := range symbol.StaticFields {
+			fmt.Fprintf(&out, "    %s\n", field.Signature)
+			if options.verbose && field.Doc != "" {
+				fmt.Fprintf(&out, "        %s\n", field.Doc)
+			}
+		}
+	}
 	if len(symbol.Static) > 0 {
 		out.WriteString("\nStatic Methods:\n")
 		for _, method := range symbol.Static {

@@ -374,6 +374,14 @@ func classifyGPPTokens(file *compiler.File, result map[int]semanticToken) {
 				fieldNames[field.Name] = true
 				mark(firstIdentifierInSpan(file.Tokens, field.SpanValue), semanticProperty, modifierDeclaration)
 			}
+			for _, field := range value.StaticFields {
+				fieldNames[field.Name] = true
+				modifiers := modifierDeclaration | modifierStatic
+				if field.IsConstant {
+					modifiers |= modifierReadonly
+				}
+				mark(firstIdentifierInSpan(file.Tokens, field.SpanValue), semanticProperty, modifiers)
+			}
 			for _, method := range value.Methods {
 				methodNames[method.Name] = true
 				modifiers := modifierDeclaration

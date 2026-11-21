@@ -138,7 +138,7 @@ func (s *server) contextualCompletions(state *fileState, offset int) []Completio
 			if packageName, packageDir, memberType, ok := s.importedTypePackage(state, typeName); ok {
 				var matched []CompletionItem
 				for _, info := range s.packageSymbols(packageName, packageDir) {
-					if info.Symbol.Parent == memberType && (info.Symbol.Kind == compiler.DocField || info.Symbol.Kind == compiler.DocMethod || info.Symbol.Kind == compiler.DocExtension || info.Symbol.Kind == compiler.DocValue) {
+					if info.Symbol.Parent == memberType && !info.Symbol.StaticField && (info.Symbol.Kind == compiler.DocField || info.Symbol.Kind == compiler.DocMethod || info.Symbol.Kind == compiler.DocExtension || info.Symbol.Kind == compiler.DocValue) {
 						if !s.classMemberVisibleInCompletion(state, offset, info.Symbol) {
 							continue
 						}
@@ -147,7 +147,7 @@ func (s *server) contextualCompletions(state *fileState, offset int) []Completio
 				}
 				if len(matched) == 0 {
 					for _, info := range s.inheritedMembersForType(packageName, packageDir, memberType, "") {
-						if !s.classMemberVisibleInCompletion(state, offset, info.Symbol) {
+						if info.Symbol.StaticField || !s.classMemberVisibleInCompletion(state, offset, info.Symbol) {
 							continue
 						}
 						matched = append(matched, completionForSymbol(info.Symbol))
@@ -170,7 +170,7 @@ func (s *server) contextualCompletions(state *fileState, offset int) []Completio
 					}
 				}
 				for _, info := range s.classMembersForType(state, typeName, "", true) {
-					if !s.classMemberVisibleInCompletion(state, offset, info.Symbol) {
+					if info.Symbol.StaticField || !s.classMemberVisibleInCompletion(state, offset, info.Symbol) {
 						continue
 					}
 					if className != "" {
@@ -1082,11 +1082,15 @@ func (s *server) constructorFieldSymbols(packageName, className string, classes 
 	}
 	var members []symbolInfo
 	for _, info := range s.packageSymbols(packageName, packageDir) {
-		if info.Symbol.Parent == className && info.Symbol.Kind == compiler.DocField {
+		if info.Symbol.Parent == className && info.Symbol.Kind == compiler.DocField && !info.Symbol.StaticField {
 			members = append(members, info)
 		}
 	}
-	members = append(members, s.inheritedMembersForType(packageName, packageDir, className, "")...)
+	for _, info := range s.inheritedMembersForType(packageName, packageDir, className, "") {
+		if info.Symbol.Kind == compiler.DocField && !info.Symbol.StaticField {
+			members = append(members, info)
+		}
+	}
 	return members
 }
 
@@ -1158,6 +1162,9 @@ func completionForSymbol(symbol compiler.DocSymbol) CompletionItem {
 		}
 	}
 	item := CompletionItem{Label: symbol.Name, Kind: lspSymbolKind(symbol.Kind), Detail: symbol.Signature, Documentation: symbol.Doc, Deprecated: deprecated(symbol)}
+	if symbol.Constant {
+		item.Kind = 21 // LSP CompletionItemKindConstant
+	}
 	if symbol.Kind == compiler.DocFunction || symbol.Kind == compiler.DocMethod || symbol.Kind == compiler.DocExtension {
 		item.InsertText = callableSnippet(symbol.Name, symbol.Signature)
 		item.InsertTextFormat = 2 // LSP InsertTextFormatSnippet

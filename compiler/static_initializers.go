@@ -7,6 +7,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,11 +21,16 @@ type staticInitializationContext struct {
 }
 
 func staticInitializerOrder(class *ClassDecl) []instanceInitializer {
-	return classInitializerOrder(class.StaticFields, class.StaticInitializers)
+	items := classInitializerOrder(class.StaticFields, class.StaticInitializers)
+	return slices.DeleteFunc(items, func(item instanceInitializer) bool {
+		return item.field != nil && item.field.IsConstant
+	})
 }
 
 func declaresStaticInitialization(class *ClassDecl) bool {
-	return len(class.StaticFields) != 0 || len(class.StaticInitializers) != 0
+	return len(class.StaticInitializers) != 0 || slices.ContainsFunc(class.StaticFields, func(field Field) bool {
+		return !field.IsConstant
+	})
 }
 
 func programDeclaresStaticInitialization(files []*File) bool {
@@ -140,6 +146,9 @@ func emitStaticInitialization(out *strings.Builder, class *ClassDecl, classes ma
 	out.WriteString("\t}, __gppUnwrapThrown, __gppThrow)\n}\n\n")
 	for index := range class.StaticFields {
 		field := &class.StaticFields[index]
+		if field.IsConstant {
+			continue
+		}
 		ref := staticFieldReference{owner: class, field: field}
 		storage := "__gppStaticField_" + class.Name + "_" + field.Name
 		fieldType := transformPolymorphicType(fieldTypeSource(*field), context)
@@ -165,6 +174,9 @@ func validateStaticInitializers(class *ClassDecl, names map[string]bool) error {
 			return fieldDiagnosticf(class, field, "class %s declares field %s more than once", class.Name, field.Name)
 		}
 		names[field.Name] = true
+		if field.IsConstant && field.InitializerAST == nil {
+			return fieldDiagnosticf(class, field, "static constant %s requires an initializer", field.Name)
+		}
 		// Static field descriptors need separate storage and reflection accessors.
 		if len(field.Annotations) != 0 {
 			return fieldDiagnosticf(class, field, "annotations on static fields are not supported yet")
@@ -315,7 +327,7 @@ func rewriteStaticFields(body string, context constructorContext) (string, error
 		case *ast.AssignStmt:
 			if len(value.Lhs) == 1 && len(value.Rhs) == 1 && value.Tok == token.ASSIGN {
 				field, _ := ast.Unparen(value.Lhs[0]).(*ast.SelectorExpr)
-				if ref, ok := fields[field]; ok {
+				if ref, ok := fields[field]; ok && !ref.field.IsConstant {
 					// Go evaluates the argument before entering the setter,
 					// matching putstatic after Java's RHS evaluation.
 					add(value.Lhs[0].Pos(), value.Rhs[0].Pos(), ref.accessor("Set")+"(")
@@ -345,7 +357,9 @@ func rewriteStaticFields(body string, context constructorContext) (string, error
 	})
 	for selector, ref := range fields {
 		access := ref.accessor("Get") + "()"
-		if address[selector] {
+		if ref.field.IsConstant {
+			access = ref.constantName()
+		} else if address[selector] {
 			access = "(*" + ref.accessor("Addr") + "())"
 		}
 		add(selector.Pos(), selector.End(), access)
