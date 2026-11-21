@@ -17,6 +17,7 @@ type javaObjectClass struct {
 	methods      []*javaObjectMethod
 	virtual      map[string]*javaObjectMethod
 	embed        bool
+	checksErrors bool
 }
 
 type javaObjectMethod struct {
@@ -123,12 +124,12 @@ func (program *javaObjectProgram) addMember(class *javaObjectClass, declaration 
 		}
 		class.initializers = append(class.initializers, declaration)
 	case "VARIABLE":
-		if _, ok := primitiveTypes[declaration.Type]; !ok || !token.IsIdentifier(declaration.Name) {
+		if objectGoType(declaration.Type) == "" || !token.IsIdentifier(declaration.Name) {
 			return fmt.Errorf("unsupported field name or type %s", declaration.Type)
 		}
 		if slices.Contains(declaration.Modifiers, "STATIC") {
 			if declaration.Constant == nil || !hasOnlyModifiers(declaration, "STATIC", "FINAL", "PUBLIC", "PROTECTED", "PRIVATE") {
-				return fmt.Errorf("requires a compile-time primitive constant for static fields")
+				return fmt.Errorf("requires a compile-time primitive or String constant for static fields")
 			}
 			if slices.Contains(declaration.Modifiers, "PUBLIC") {
 				name := class.declaration.Name + declaration.Name
@@ -144,6 +145,7 @@ func (program *javaObjectProgram) addMember(class *javaObjectClass, declaration 
 			if declaration.Initializer != nil {
 				class.initializers = append(class.initializers, declaration)
 			}
+			program.runtime = program.runtime || declaration.Type == javaStringType
 		}
 		class.fields = append(class.fields, declaration)
 		program.fields[declaration.Symbol] = javaObjectField{declaration, class}
@@ -161,9 +163,10 @@ func (program *javaObjectProgram) addMethod(class *javaObjectClass, declaration 
 		return fmt.Errorf("unsupported constructor or method modifiers, body, type parameters, or throws")
 	}
 	for _, parameter := range declaration.Parameters {
-		if _, ok := primitiveTypes[parameter.Type]; !ok {
+		if objectGoType(parameter.Type) == "" {
 			return fmt.Errorf("unsupported parameter type %s", parameter.Type)
 		}
+		program.runtime = program.runtime || parameter.Type == javaStringType
 	}
 	method := &javaObjectMethod{declaration: declaration, class: class, public: slices.Contains(declaration.Modifiers, "PUBLIC")}
 	if declaration.Name == "<init>" {
@@ -181,9 +184,10 @@ func (program *javaObjectProgram) addMethod(class *javaObjectClass, declaration 
 		if !method.public && !slices.Contains(declaration.Modifiers, "PRIVATE") {
 			return fmt.Errorf("package-private or protected methods require additional dispatch support")
 		}
-		if declaration.Result != "void" && primitiveTypes[declaration.Result] == "" {
+		if declaration.Result != "void" && objectGoType(declaration.Result) == "" {
 			return fmt.Errorf("unsupported method result type %s", declaration.Result)
 		}
+		program.runtime = program.runtime || declaration.Result == javaStringType
 		method.goName = exportMethodName(declaration.Name)
 		method.internal = "javaBody" + declaration.Name
 		if !token.IsIdentifier(method.goName) || !token.IsExported(method.goName) {
@@ -273,7 +277,11 @@ func onlySourceAnnotations(declaration Occurrence) bool {
 func constructorSuffix(parameters []Parameter) string {
 	var types []string
 	for _, parameter := range parameters {
-		types = append(types, exportMethodName(parameter.Type))
+		name := parameter.Type
+		if name == javaStringType {
+			name = "String"
+		}
+		types = append(types, exportMethodName(name))
 	}
 	if len(types) == 0 {
 		return ""

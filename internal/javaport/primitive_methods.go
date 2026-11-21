@@ -106,7 +106,7 @@ func emitPrimitiveMethod(name string, declaration Occurrence) (string, bool, err
 		strings.Join(parameters, ", "), result, value), usesRuntime || convertedWithRuntime, nil
 }
 
-func emitPrimitiveExpression(expression *PrimitiveExpression, arguments map[string]string) (string, bool, error) {
+func emitPrimitiveExpression(expression *JavaExpression, arguments map[string]string) (string, bool, error) {
 	switch expression.Kind {
 	case "LEFT_SHIFT", "RIGHT_SHIFT", "UNSIGNED_RIGHT_SHIFT":
 		return emitPrimitiveShift(expression, arguments)
@@ -131,7 +131,7 @@ func emitPrimitiveExpression(expression *PrimitiveExpression, arguments map[stri
 	return "", false, fmt.Errorf("unsupported expression %s at %d:%d", expression.Kind, expression.Line, expression.Column)
 }
 
-func emitPrimitiveShift(expression *PrimitiveExpression, arguments map[string]string) (string, bool, error) {
+func emitPrimitiveShift(expression *JavaExpression, arguments map[string]string) (string, bool, error) {
 	if expression.Left == nil || expression.Right == nil {
 		return "", false, fmt.Errorf("missing shift operand at %d:%d", expression.Line, expression.Column)
 	}

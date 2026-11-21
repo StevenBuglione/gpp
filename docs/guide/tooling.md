@@ -137,11 +137,17 @@ and return a parameter, cast, or shift expression. Generated function names comb
 the Java class and method names. Floating-point narrowing follows Java's
 saturation and NaN rules through the bundled `gpp/java` package.
 
-For public classes with primitive fields and method signatures, the emitter
+For public classes with primitive or Java `String` fields and method signatures, the emitter
 also supports same-package single inheritance, constructor chains, instance
 initialization and virtual calls during construction. It emits Go constructors
 such as `NewChild()` and `NewChildWithInt(int32)`. Go callers can use exported
 methods directly or request an ancestor view such as `child.GppAsBase()`.
+
+Java `String` becomes a `*java.String` from the generated module's `gpp/java`
+package. A nil pointer represents Java null. Use `StringFromGo` to decode Go
+UTF-8 and `ToGo` to decode a Java name and check for null. Use `StringFromUTF16`
+and `UTF16` when every code unit must survive, including unpaired surrogates.
+Literals and explicit interning share references within the generated module.
 
 ## Developing this documentation site
 

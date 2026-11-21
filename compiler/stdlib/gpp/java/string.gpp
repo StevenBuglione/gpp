@@ -1,0 +1,127 @@
+package gpp.java
+
+import (
+    "math"
+    "sync"
+    "unicode/utf16"
+)
+
+// String is an immutable Java String reference. Go's nil pointer is Java null.
+// The backing bytes contain little-endian UTF-16 code units, including any
+// unpaired surrogates. Go callers pass the pointer to preserve Java identity.
+type String struct {
+    encoded string
+}
+
+var internedStrings sync.Map
+
+// StringFromUTF16 copies code units to a fresh String, even for empty input.
+func StringFromUTF16(codeUnits []uint16) *String {
+    if len(codeUnits) > math.MaxInt32 || len(codeUnits) > math.MaxInt/2 {
+        panic("Java String exceeds the maximum representable length")
+    }
+    bytes := make([]byte, 2*len(codeUnits))
+    for index, unit := range codeUnits {
+        bytes[2*index] = byte(unit)
+        bytes[2*index+1] = byte(unit >> 8)
+    }
+    return &String{encoded: string(bytes)}
+}
+
+// StringFromGo decodes a Go UTF-8 string into a fresh non-null Java String.
+// Invalid UTF-8 bytes decode as U+FFFD under Go's rune decoding rules.
+func StringFromGo(value string) *String {
+    return StringFromUTF16(utf16.Encode([]rune(value)))
+}
+
+// UTF16 returns a copy of the code units. A nil result represents Java null.
+func (value *String) UTF16() []uint16 {
+    if value == nil {
+        return nil
+    }
+    units := make([]uint16, len(value.encoded)/2)
+    for index := range units {
+        units[index] = stringCodeUnit(value.encoded, index)
+    }
+    return units
+}
+
+// ToGo decodes UTF-16 to UTF-8, replacing unpaired surrogates with U+FFFD.
+// It returns false for Java null.
+func (value *String) ToGo() (string, bool) {
+    if value == nil {
+        return "", false
+    }
+    return string(utf16.Decode(value.UTF16())), true
+}
+
+// InternStringLiteral is the compiler entry point for attributed literals.
+func InternStringLiteral(utf16LE string) *String {
+    if len(utf16LE)%2 != 0 || len(utf16LE)/2 > math.MaxInt32 {
+        panic("invalid UTF-16 encoding of Java string literal")
+    }
+    if existing, found := internedStrings.Load(utf16LE); found {
+        return existing.(*String)
+    }
+    return internString(&String{encoded: utf16LE})
+}
+
+func StringLength(value *String) (int32, error) {
+    if value == nil {
+        return 0, &NullPointerException{}
+    }
+    return int32(len(value.encoded)/2), nil
+}
+
+func StringCharAt(value *String, index int32) (uint16, error) {
+    if value == nil {
+        return 0, &NullPointerException{}
+    }
+    length := len(value.encoded)/2
+    if index < 0 || int(index) >= length {
+        return 0, &StringIndexOutOfBoundsException{Index: index, Length: length}
+    }
+    return stringCodeUnit(value.encoded, int(index)), nil
+}
+
+func StringEquals(value, other *String) (bool, error) {
+    if value == nil {
+        return false, &NullPointerException{}
+    }
+    return other != nil && value.encoded == other.encoded, nil
+}
+
+func StringHashCode(value *String) (int32, error) {
+    if value == nil {
+        return 0, &NullPointerException{}
+    }
+    var hash int32
+    for index := 0; index < len(value.encoded)/2; index++ {
+        hash = 31*hash + int32(stringCodeUnit(value.encoded, index))
+    }
+    return hash, nil
+}
+
+func StringIntern(value *String) (*String, error) {
+    if value == nil {
+        return nil, &NullPointerException{}
+    }
+    return internString(value), nil
+}
+
+func StringCopy(value *String) (*String, error) {
+    if value == nil {
+        return nil, &NullPointerException{}
+    }
+    return &String{encoded: value.encoded}, nil
+}
+
+func internString(value *String) *String {
+    canonical, _ := internedStrings.LoadOrStore(value.encoded, value)
+    return canonical.(*String)
+}
+
+func stringCodeUnit(encoded string, index int) uint16 {
+    offset := 2*index
+    return uint16(encoded[offset]) | uint16(encoded[offset+1])<<8
+}

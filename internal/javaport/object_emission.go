@@ -15,6 +15,14 @@ func (program *javaObjectProgram) emitClass(out *strings.Builder, class *javaObj
 		if !slices.Contains(field.Modifiers, "STATIC") || !slices.Contains(field.Modifiers, "PUBLIC") {
 			continue
 		}
+		if field.Type == javaStringType {
+			literal, err := program.stringLiteral(field.ConstantUTF16LE)
+			if err != nil {
+				return unsupportedSource(class.file, field, err.Error())
+			}
+			fmt.Fprintf(out, "\nfunc %s%s() *javart.String { return %s }\n", name, field.Name, literal)
+			continue
+		}
 		literal, err := objectPrimitiveLiteral(field.Type, *field.Constant)
 		if err != nil {
 			return unsupportedSource(class.file, field, err.Error())
@@ -30,7 +38,7 @@ func (program *javaObjectProgram) emitClass(out *strings.Builder, class *javaObj
 	}
 	for _, field := range class.fields {
 		if !slices.Contains(field.Modifiers, "STATIC") {
-			fmt.Fprintf(out, "\tjavaField%s %s\n", field.Name, primitiveTypes[field.Type])
+			fmt.Fprintf(out, "\tjavaField%s %s\n", field.Name, objectGoType(field.Type))
 		}
 	}
 	for _, method := range class.methods {
@@ -77,7 +85,14 @@ func (program *javaObjectProgram) emitClass(out *strings.Builder, class *javaObj
 			return unsupportedSource(class.file, method.declaration, err.Error())
 		}
 	}
+	if class.checksErrors {
+		fmt.Fprintf(out, "\nfunc %s[T any](value T, failure error) T {\n\tif failure != nil {\n\t\tthrow failure\n\t}\n\treturn value\n}\n", class.checkedResultName())
+	}
 	return nil
+}
+
+func (class *javaObjectClass) checkedResultName() string {
+	return "javaCheckedResult" + class.declaration.Name
 }
 
 type javaObjectContext struct {
@@ -209,26 +224,46 @@ func (ctx javaObjectContext) statement(statement JavaStatement, result string) (
 	return "", fmt.Errorf("unsupported statement %s", statement.Kind)
 }
 
-func (ctx javaObjectContext) converted(expression *PrimitiveExpression, target string) (string, error) {
+func (ctx javaObjectContext) converted(expression *JavaExpression, target string) (string, error) {
 	value, err := ctx.expression(expression)
 	if err != nil {
 		return "", err
+	}
+	if target == javaStringType {
+		switch expression.Type {
+		case javaStringType:
+			return value, nil
+		case "null":
+			ctx.program.runtime = true
+			return "(*javart.String)(" + value + ")", nil
+		}
 	}
 	converted, usesRuntime, err := convertPrimitive(value, expression.Type, target)
 	ctx.program.runtime = ctx.program.runtime || usesRuntime
 	return converted, err
 }
 
-func (ctx javaObjectContext) expression(expression *PrimitiveExpression) (string, error) {
+func (ctx javaObjectContext) expression(expression *JavaExpression) (string, error) {
 	switch expression.Kind {
 	case "FIELD":
 		return ctx.field(expression)
 	case "METHOD_INVOCATION":
 		return ctx.invoke(expression)
+	case "NEW_CLASS":
+		return ctx.newString(expression)
+	case "STRING_LITERAL":
+		return ctx.program.stringLiteral(expression.UTF16LE)
+	case "NULL_LITERAL":
+		return "nil", nil
+	case "EQUAL_TO", "NOT_EQUAL_TO":
+		return ctx.stringReferenceComparison(expression)
 	case "PARENTHESIZED":
 		value, err := ctx.expression(expression.Operand)
 		return "(" + value + ")", err
 	case "TYPE_CAST":
+		if expression.Type == javaStringType {
+			return ctx.converted(expression.Operand, expression.Type)
+		}
 		value, err := ctx.expression(expression.Operand)
 		if err != nil {
 			return "", err
@@ -251,7 +286,10 @@ func (ctx javaObjectContext) expression(expression *PrimitiveExpression) (string
 	}
 }
 
-func (ctx javaObjectContext) field(expression *PrimitiveExpression) (string, error) {
+func (ctx javaObjectContext) field(expression *JavaExpression) (string, error) {
+	if expression.Static && expression.UTF16LE != nil && expression.Receiver != "other" {
+		return ctx.program.stringLiteral(expression.UTF16LE)
+	}
 	if expression.Static && expression.Literal != "" && expression.Receiver != "other" {
 		return objectPrimitiveLiteral(expression.Type, expression.Literal)
 	}
@@ -266,7 +304,10 @@ func (ctx javaObjectContext) field(expression *PrimitiveExpression) (string, err
 	return receiver + ".javaField" + field.declaration.Name, nil
 }
 
-func (ctx javaObjectContext) invoke(expression *PrimitiveExpression) (string, error) {
+func (ctx javaObjectContext) invoke(expression *JavaExpression) (string, error) {
+	if expression.Target != nil && expression.Target.Type == javaStringType {
+		return ctx.invokeString(expression)
+	}
 	callee := ctx.program.methods[expression.Symbol]
 	if callee == nil || callee.declaration.Name == "<init>" ||
 		(expression.Receiver != "this" && expression.Receiver != "super") {
@@ -291,7 +332,7 @@ func (ctx javaObjectContext) invoke(expression *PrimitiveExpression) (string, er
 	return fmt.Sprintf("%s.%s(%s)", receiver, name, values), nil
 }
 
-func (ctx javaObjectContext) callArguments(call *PrimitiveExpression, callee *javaObjectMethod) (string, error) {
+func (ctx javaObjectContext) callArguments(call *JavaExpression, callee *javaObjectMethod) (string, error) {
 	parameters := callee.declaration.Parameters
 	if len(call.Arguments) != len(parameters) {
 		return "", fmt.Errorf("unsupported Java invocation arity for %s", call.Symbol)
@@ -320,7 +361,7 @@ func objectParameterList(parameters []Parameter) (string, string) {
 	arguments := make([]string, 0, len(parameters))
 	for index, parameter := range parameters {
 		name := "parameter" + strconv.Itoa(index)
-		declarations = append(declarations, name+" "+primitiveTypes[parameter.Type])
+		declarations = append(declarations, name+" "+objectGoType(parameter.Type))
 		arguments = append(arguments, name)
 	}
 	return strings.Join(declarations, ", "), strings.Join(arguments, ", ")
@@ -330,7 +371,7 @@ func objectResultType(method *javaObjectMethod) string {
 	if method.declaration.Result == "void" {
 		return ""
 	}
-	return " " + primitiveTypes[method.declaration.Result]
+	return " " + objectGoType(method.declaration.Result)
 }
 
 func objectPrimitiveLiteral(javaType, value string) (string, error) {

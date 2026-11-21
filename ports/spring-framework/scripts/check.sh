@@ -11,7 +11,7 @@ cp -R "$port_root/testdata/consumer" "$temp_root/consumer"
 
 (
     cd "$port_root"
-    "$gpp" compile -output "$temp_root/generated" ./spring-core
+    "$gpp" compile -output "$temp_root/generated" ./spring-core ./spring-jdbc
 )
 (
     cd "$temp_root/consumer"

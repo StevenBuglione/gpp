@@ -35,6 +35,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.TreeMap;
@@ -217,7 +218,7 @@ class JavaSourceAnalysis {
                 return methodBodyRecord(path, method);
             }
             if (tree instanceof VariableTree field && field.getInitializer() != null) {
-                return ",\"initializer\":" + primitiveExpression(new TreePath(path, field.getInitializer()));
+                return ",\"initializer\":" + executableExpression(new TreePath(path, field.getInitializer()));
             }
             if (tree instanceof BlockTree block) {
                 var owner = trees.getElement(path.getParentPath());
@@ -244,7 +245,7 @@ class JavaSourceAnalysis {
                     call.getMethodSelect() instanceof IdentifierTree selector &&
                     (selector.getName().contentEquals("this") || selector.getName().contentEquals("super"))) {
                 var callPath = new TreePath(new TreePath(bodyPath, statement), call);
-                invocation = ",\"constructorCall\":" + primitiveExpression(callPath);
+                invocation = ",\"constructorCall\":" + executableExpression(callPath);
                 statements = statements.subList(1, statements.size());
             }
             var explicit = statements.stream()
@@ -270,7 +271,7 @@ class JavaSourceAnalysis {
                 expression = expressionStatement.getExpression();
             }
             if (expression != null) {
-                record += ",\"expression\":" + primitiveExpression(new TreePath(path, expression));
+                record += ",\"expression\":" + executableExpression(new TreePath(path, expression));
             }
             return record + "}";
         }
@@ -284,11 +285,11 @@ class JavaSourceAnalysis {
                 ",\"column\":" + unit.getLineMap().getColumnNumber(start);
         }
 
-        private String primitiveExpression(TreePath path) {
+        private String executableExpression(TreePath path) {
             var tree = path.getLeaf();
             var type = trees.getTypeMirror(path);
             String kind = tree.getKind().name();
-            String attributes = ",\"type\":" + quote(type == null ? "" : type.getKind().name().toLowerCase(Locale.ROOT)) +
+            String attributes = ",\"type\":" + quote(expressionType(type)) +
                 positionRecord(tree);
             if (tree instanceof IdentifierTree identifier) {
                 var element = trees.getElement(path);
@@ -310,26 +311,56 @@ class JavaSourceAnalysis {
                 if (callee instanceof IdentifierTree identifier && identifier.getName().contentEquals("super")) {
                     receiver = "super";
                 }
-                attributes += ",\"symbol\":" + quote(symbol(trees.getElement(path))) +
-                    ",\"receiver\":" + quote(receiver) + ",\"arguments\":[" + call.getArguments().stream()
-                    .map(argument -> primitiveExpression(new TreePath(path, argument)))
-                    .collect(Collectors.joining(",")) + "]";
+                String symbol = symbol(trees.getElement(path));
+                attributes += ",\"symbol\":" + quote(symbol) + ",\"receiver\":" + quote(receiver) +
+                    callArguments(path, call.getArguments());
+                if (symbol.startsWith("java.lang.String#") && callee instanceof MemberSelectTree selector &&
+                        receiver.equals("other")) {
+                    var target = TreePath.getPath(path, selector.getExpression());
+                    attributes += ",\"target\":" + executableExpression(target);
+                }
+            } else if (tree instanceof NewClassTree call) {
+                if (call.getEnclosingExpression() == null && call.getClassBody() == null) {
+                    attributes += ",\"symbol\":" + quote(symbol(trees.getElement(path))) +
+                        callArguments(path, call.getArguments());
+                }
             } else if (tree instanceof AssignmentTree assignment) {
-                attributes += ",\"left\":" + primitiveExpression(new TreePath(path, assignment.getVariable())) +
-                    ",\"right\":" + primitiveExpression(new TreePath(path, assignment.getExpression()));
+                attributes += ",\"left\":" + executableExpression(new TreePath(path, assignment.getVariable())) +
+                    ",\"right\":" + executableExpression(new TreePath(path, assignment.getExpression()));
             } else if (tree instanceof TypeCastTree cast) {
-                attributes += ",\"operand\":" + primitiveExpression(new TreePath(path, cast.getExpression()));
+                attributes += ",\"operand\":" + executableExpression(new TreePath(path, cast.getExpression()));
             } else if (tree instanceof ParenthesizedTree parentheses) {
-                attributes += ",\"operand\":" + primitiveExpression(new TreePath(path, parentheses.getExpression()));
+                attributes += ",\"operand\":" + executableExpression(new TreePath(path, parentheses.getExpression()));
             } else if (tree instanceof BinaryTree binary) {
-                attributes += ",\"left\":" + primitiveExpression(new TreePath(path, binary.getLeftOperand())) +
-                    ",\"right\":" + primitiveExpression(new TreePath(path, binary.getRightOperand()));
-            } else if (tree instanceof LiteralTree literal && type != null && type.getKind().isPrimitive()) {
-                Object value = literal.getValue();
-                String spelling = value instanceof Character character ? Integer.toString(character) : value.toString();
-                attributes += ",\"literal\":" + quote(spelling);
+                attributes += ",\"left\":" + executableExpression(new TreePath(path, binary.getLeftOperand())) +
+                    ",\"right\":" + executableExpression(new TreePath(path, binary.getRightOperand()));
+            } else if (tree instanceof LiteralTree literal) {
+                if (literal.getValue() instanceof String text) {
+                    attributes += ",\"utf16LE\":" + quote(utf16LittleEndian(text));
+                } else if (type != null && type.getKind().isPrimitive()) {
+                    Object value = literal.getValue();
+                    String spelling = value instanceof Character character ? Integer.toString(character) : value.toString();
+                    attributes += ",\"literal\":" + quote(spelling);
+                }
             }
             return "{\"kind\":" + quote(kind) + attributes + "}";
+        }
+
+        private String callArguments(TreePath path, List<? extends ExpressionTree> arguments) {
+            return ",\"arguments\":[" + arguments.stream()
+                .map(argument -> executableExpression(new TreePath(path, argument)))
+                .collect(Collectors.joining(",")) + "]";
+        }
+
+        private String expressionType(TypeMirror type) {
+            if (type == null) {
+                return "";
+            }
+            if (type instanceof DeclaredType declared && declared.asElement() instanceof TypeElement element &&
+                    element.getQualifiedName().contentEquals("java.lang.String")) {
+                return "java.lang.String";
+            }
+            return type.getKind().name().toLowerCase(Locale.ROOT);
         }
 
         private String fieldExpression(VariableElement field, String receiver) {
@@ -340,6 +371,8 @@ class JavaSourceAnalysis {
                 if (value != null && field.asType().getKind().isPrimitive()) {
                     String spelling = value instanceof Character character ? Integer.toString(character) : value.toString();
                     attributes += ",\"literal\":" + quote(spelling);
+                } else if (value instanceof String text) {
+                    attributes += ",\"utf16LE\":" + quote(utf16LittleEndian(text));
                 }
             }
             return attributes;
@@ -396,11 +429,25 @@ class JavaSourceAnalysis {
             }
             if (element instanceof VariableElement variable && variable.getConstantValue() != null) {
                 Object constant = variable.getConstantValue();
+                if (constant instanceof String text) {
+                    result += ",\"constantUtf16LE\":" + quote(utf16LittleEndian(text));
+                }
                 String spelling = constant instanceof Character character ?
                     Integer.toString(character) : constant.toString();
                 return result + ",\"constant\":" + quote(spelling);
             }
             return result;
+        }
+
+        private String utf16LittleEndian(String value) {
+            // An ASCII transport preserves unpaired surrogate code units.
+            byte[] encoded = new byte[value.length() * 2];
+            for (int index = 0; index < value.length(); index++) {
+                char unit = value.charAt(index);
+                encoded[2 * index] = (byte) unit;
+                encoded[2 * index + 1] = (byte) (unit >>> 8);
+            }
+            return HexFormat.of().formatHex(encoded);
         }
 
         private String typeRecord(TypeMirror type) {

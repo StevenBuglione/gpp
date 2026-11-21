@@ -1,5 +1,7 @@
 package gpp.java
 
+import "fmt"
+
 // Throwable is the Go-facing contract for errors with a Java class identity.
 type Throwable interface {
     error
@@ -26,3 +28,26 @@ func (exception *IllegalArgumentException) JavaClassName() string {
 }
 
 func (exception *IllegalArgumentException) JavaRuntimeException() {}
+
+type NullPointerException struct {
+    _ byte
+}
+
+func (*NullPointerException) Error() string { return "java.lang.NullPointerException" }
+
+func (*NullPointerException) JavaClassName() string { return "java.lang.NullPointerException" }
+
+func (*NullPointerException) JavaRuntimeException() {}
+
+type StringIndexOutOfBoundsException struct {
+    Index int32
+    Length int
+}
+
+func (exception *StringIndexOutOfBoundsException) Error() string {
+    return fmt.Sprintf("Index %d out of bounds for length %d", exception.Index, exception.Length)
+}
+
+func (*StringIndexOutOfBoundsException) JavaClassName() string { return "java.lang.StringIndexOutOfBoundsException" }
+
+func (*StringIndexOutOfBoundsException) JavaRuntimeException() {}

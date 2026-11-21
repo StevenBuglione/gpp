@@ -13,16 +13,21 @@ if [[ "$(git -C "$checkout" rev-parse HEAD)" != "$revision" ]] ||
     printf 'Expected a clean Framework checkout at %s (%s).\n' "$tag" "$revision" >&2
     exit 1
 fi
-core="$checkout/spring-core"
-classes="$core/build/classes/java/main"
-if [[ ! -d "$classes" ]]; then
-    printf '%s\n' 'Build the upstream :spring-core:compileJava task first.' >&2
-    exit 2
-fi
-
-for class in org/springframework/asm/SpringAsmInfo org/springframework/cglib/SpringCglibInfo; do
+sources=(
+    spring-core/org/springframework/asm/SpringAsmInfo
+    spring-core/org/springframework/cglib/SpringCglibInfo
+    spring-jdbc/org/springframework/jdbc/core/metadata/TableParameterMetaData
+)
+for path in "${sources[@]}"; do
+    module="${path%%/*}"
+    class="${path#*/}"
+    classes="$checkout/$module/build/classes/java/main"
+    if [[ ! -d "$classes" ]]; then
+        printf 'Build the upstream :%s:compileJava task first.\n' "$module" >&2
+        exit 2
+    fi
     "${GPP:-gpp}" migrate java --emit-gpp --java "${JAVA:-java}" --release 17 \
-        --class-path "$classes" "$core/src/main/java/$class.java" | \
-        diff -u --label "$class.gpp (checked in)" --label "$class.gpp (translated)" \
-            <(sed -n '/^package /,$p' "$port_root/spring-core/$class.gpp") -
+        --class-path "$classes" "$checkout/$module/src/main/java/$class.java" | \
+        diff -u --label "$path.gpp (checked in)" --label "$path.gpp (translated)" \
+            <(sed -n '/^package /,$p' "$port_root/$path.gpp") -
 done
