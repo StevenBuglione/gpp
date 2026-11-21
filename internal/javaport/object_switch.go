@@ -134,7 +134,7 @@ func (ctx javaObjectContext) emitJavaSwitchMatch(out *strings.Builder, selector 
 					return err
 				}
 				ctx.program.runtime = true
-				match = ctx.checkedRuntimeCall("javart.StringEquals(javaSelector, " + labelValue + ")")
+				match = ctx.checkedRuntimeCall("javart.StringEquals(javaSelector, "+labelValue+")", "boolean")
 			} else if legacySwitchInteger(primitive) {
 				labelValue, err := ctx.converted(label, primitive)
 				if err != nil {

@@ -65,16 +65,22 @@ func (ctx javaObjectContext) allocateObject(expression *JavaExpression) (string,
 }
 
 func (ctx javaObjectContext) invokeReference(expression *JavaExpression, method *javaObjectMethod) (string, error) {
-	parameters := method.declaration.Parameters
-	if len(expression.Arguments) != len(parameters) {
-		return "", fmt.Errorf("unsupported Java invocation arity for %s", expression.Symbol)
-	}
 	target, err := ctx.expression(expression.Target)
 	if err != nil {
 		return "", err
 	}
+	return ctx.emitReferenceInvocation(expression, method.declaration, target, func(receiver, arguments string) string {
+		return receiver + "." + method.goName + "(" + arguments + ")"
+	})
+}
+
+func (ctx javaObjectContext) emitReferenceInvocation(expression *JavaExpression, declaration Occurrence, target string, invoke func(string, string) string) (string, error) {
+	parameters := declaration.Parameters
+	if len(expression.Arguments) != len(parameters) {
+		return "", fmt.Errorf("unsupported Java invocation arity for %s", expression.Symbol)
+	}
 	var code strings.Builder
-	fmt.Fprintf(&code, "func()%s {\n\tjavaReceiver := %s\n", ctx.program.objectResultType(method), target)
+	fmt.Fprintf(&code, "func()%s {\n\tjavaReceiver := %s\n", ctx.program.interfaceResult(declaration), target)
 	args := make([]string, 0, len(parameters))
 	for index, argument := range expression.Arguments {
 		value, err := ctx.converted(argument, parameters[index].Type)
@@ -87,10 +93,10 @@ func (ctx javaObjectContext) invokeReference(expression *JavaExpression, method 
 	}
 	// Java evaluates every argument before the invocation's null-receiver check.
 	code.WriteString("\tjavart.RequireNonNull(javaReceiver)\n\t")
-	if method.declaration.Result != "void" {
+	if declaration.Result != "void" {
 		code.WriteString("return ")
 	}
-	fmt.Fprintf(&code, "javaReceiver.%s(%s)\n}()", method.goName, strings.Join(args, ", "))
+	fmt.Fprintf(&code, "%s\n}()", invoke("javaReceiver", strings.Join(args, ", ")))
 	ctx.program.runtime = true
 	return code.String(), nil
 }
@@ -114,9 +120,15 @@ func (program *javaObjectProgram) canConvertReference(source, target string) boo
 		return target == javaObjectType || targetRank != 0
 	}
 	if target == javaObjectType {
-		return program.classes[source] != nil || source == javaAutoCloseable || javaCatchTypes[source] != ""
+		return program.classes[source] != nil || program.interfaces[source] != nil || source == javaAutoCloseable || javaCatchTypes[source] != ""
+	}
+	if iface := program.interfaces[source]; iface != nil {
+		return iface.supers[target] != nil || (target == javaAutoCloseable && iface.closeable)
 	}
 	if class := program.classes[source]; class != nil {
+		if class.interfaces[target] != nil {
+			return true
+		}
 		if target == javaAutoCloseable && class.closeable {
 			return true
 		}
@@ -144,6 +156,9 @@ func (ctx javaObjectContext) convertReference(value, source, target string) (str
 	}
 	if source == "null" {
 		return "(" + ctx.program.objectGoType(target) + ")(" + value + ")", nil
+	}
+	if iface := ctx.program.interfaces[target]; iface != nil {
+		return ctx.interfaceReferenceCall("CastInterface", iface, value), nil
 	}
 	if target == javaAutoCloseable {
 		ctx.program.runtime = true
@@ -176,6 +191,9 @@ func (ctx javaObjectContext) cast(expression *JavaExpression) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if iface := ctx.program.interfaces[target]; iface != nil {
+		return ctx.interfaceReferenceCall("CastInterface", iface, value), nil
+	}
 	ctx.program.runtime = true
 	return "javart.CastReference[" + ctx.program.objectGoType(target) + "](" + value + ")", nil
 }
@@ -194,6 +212,9 @@ func (ctx javaObjectContext) instanceOf(expression *JavaExpression) (string, err
 	value, err := ctx.expression(expression.Operand)
 	if err != nil {
 		return "", err
+	}
+	if iface := ctx.program.interfaces[target]; iface != nil {
+		return ctx.interfaceReferenceCall("InstanceOfInterface", iface, value), nil
 	}
 	ctx.program.runtime = true
 	return "javart.InstanceOf[" + ctx.program.objectGoType(target) + "](" + value + ")", nil
@@ -215,6 +236,9 @@ func referenceComparison(expression *JavaExpression, assignable func(string, str
 	target := leftType
 	if !assignable(rightType, target) {
 		target = rightType
+		if !assignable(leftType, target) && assignable(leftType, javaObjectType) && assignable(rightType, javaObjectType) {
+			target = javaObjectType
+		}
 	}
 	if target == "null" {
 		target = javaObjectType

@@ -12,6 +12,9 @@ type javaAssertionStatus struct {
 }
 
 func (status javaAssertionStatus) enabled() string {
+	if status.storage == "" {
+		return "javart.InterfaceAssertionsEnabled(" + strconv.Quote(status.className) + ")"
+	}
 	return status.storage + ".Enabled(" + strconv.Quote(status.className) + ")"
 }
 
@@ -39,6 +42,10 @@ func (class *javaObjectClass) assertionStatus() javaAssertionStatus {
 	}
 }
 
+func (iface *javaInterface) assertionStatus() javaAssertionStatus {
+	return javaAssertionStatus{className: iface.declaration.Symbol}
+}
+
 func (ctx javaObjectContext) emitAssertionInitialization(out *strings.Builder) {
 	if ctx.class.hasAssertions {
 		fmt.Fprintf(out, "\t%s\n", ctx.class.assertionStatus().enabled())
@@ -47,7 +54,13 @@ func (ctx javaObjectContext) emitAssertionInitialization(out *strings.Builder) {
 
 func (ctx javaObjectContext) assertStatement(statement JavaStatement) (string, error) {
 	ctx.program.runtime = true
-	return emitJavaAssertion(statement, ctx.class.assertionStatus(),
+	var status javaAssertionStatus
+	if ctx.iface != nil {
+		status = ctx.iface.assertionStatus()
+	} else {
+		status = ctx.class.assertionStatus()
+	}
+	return emitJavaAssertion(statement, status,
 		func(condition *JavaExpression) (string, error) { return ctx.converted(condition, "boolean") }, ctx.assertionDetail)
 }
 

@@ -7,6 +7,7 @@ import (
 
 var defaultAssertionStatus atomic.Bool
 var classAssertionStatus sync.Map
+var interfaceAssertionStatuses sync.Map
 
 // SetDefaultAssertionStatus configures translated classes before their first use.
 func SetDefaultAssertionStatus(enabled bool) {
@@ -34,6 +35,16 @@ func (status *AssertionStatus) Enabled(className string) bool {
         }
     })
     return status.enabled
+}
+
+// InterfaceAssertionsEnabled snapshots an interface's own status separately
+// from its implementing classes.
+func InterfaceAssertionsEnabled(className string) bool {
+    status, found := interfaceAssertionStatuses.Load(className)
+    if !found {
+        status, _ = interfaceAssertionStatuses.LoadOrStore(className, new(AssertionStatus))
+    }
+    return status.(*AssertionStatus).Enabled(className)
 }
 
 // Error identifies java.lang.Error and its subclasses.

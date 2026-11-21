@@ -1,5 +1,7 @@
 package gpp.java
 
+import "reflect"
+
 // CanonicalReference returns the most-derived view of a Java object, preserving
 // Java null and the ordinary pointer representation of boxed and library types.
 func CanonicalReference(value any) any {
@@ -39,5 +41,43 @@ func CastReference[T any](value any) T {
 // InstanceOf implements a Java reference type test. Null never matches.
 func InstanceOf[T any](value any) bool {
     _, ok := referenceView[T](CanonicalReference(value))
+    return ok
+}
+
+func interfaceView[T any](value any, javaInterface string) (T, bool) {
+    result, ok := value.(T)
+    if !ok {
+        return result, false
+    }
+    if declared, translated := value.(interface{ GppJavaImplementsInterface(string) bool }); translated {
+        return result, declared.GppJavaImplementsInterface(javaInterface)
+    }
+    // Go callers can implement the exported interface directly. Bundled
+    // Java library types still use Java's nominal interface rules.
+    return result, !isBundledJavaType(reflect.TypeOf(value))
+}
+
+func isBundledJavaType(valueType reflect.Type) bool {
+    if valueType.Kind() == reflect.Pointer {
+        valueType = valueType.Elem()
+    }
+    return valueType.PkgPath() == reflect.TypeFor[String]().PkgPath()
+}
+
+func CastInterface[T any](value any, javaInterface string) T {
+    value = CanonicalReference(value)
+    if value == nil {
+        var zero T
+        return zero
+    }
+    result, ok := interfaceView[T](value, javaInterface)
+    if !ok {
+        Raise(&ClassCastException{})
+    }
+    return result
+}
+
+func InstanceOfInterface[T any](value any, javaInterface string) bool {
+    _, ok := interfaceView[T](CanonicalReference(value), javaInterface)
     return ok
 }

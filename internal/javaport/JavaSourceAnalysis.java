@@ -465,6 +465,11 @@ class JavaSourceAnalysis {
                 if (callee instanceof IdentifierTree identifier && identifier.getName().contentEquals("super")) {
                     receiver = "super";
                 }
+                if (callee instanceof MemberSelectTree selector &&
+                        selector.getExpression() instanceof MemberSelectTree qualified &&
+                        qualified.getIdentifier().contentEquals("super")) {
+                    receiver = "interface-super";
+                }
                 String symbol = symbol(trees.getElement(path));
                 attributes += ",\"symbol\":" + quote(symbol) + ",\"receiver\":" + quote(receiver) +
                     callArguments(path, call.getArguments());

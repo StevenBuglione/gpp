@@ -27,6 +27,12 @@ func (program *javaObjectProgram) emitPackageCycles(units map[string]EmittedPack
 				class.symbolPrefix = fmt.Sprintf("J%d_", index)
 			}
 		}
+		for _, iface := range program.interfaceLayout {
+			if index, found := slices.BinarySearch(members, iface.file.Package); found {
+				iface.storagePackage = storage
+				iface.symbolPrefix = fmt.Sprintf("J%d_", index)
+			}
+		}
 		implementation, err := program.emitPackage(storage)
 		if err != nil {
 			return err
@@ -48,6 +54,26 @@ func (program javaObjectProgram) emitPackageFacade(name, storage string) (emitte
 	program.facadeOf = storage
 	program.imports = map[string]string{}
 	var source strings.Builder
+	for _, iface := range program.interfaceLayout {
+		if iface.file.Package != name {
+			continue
+		}
+		publicName := iface.declaration.Name
+		fmt.Fprintf(&source, "\ntype %s = %s\n", publicName,
+			program.qualify(storage, iface.storageName(publicName)))
+		for _, field := range iface.constants {
+			if err := program.emitInterfaceConstant(&source, iface, field, storage); err != nil {
+				return emittedObjectPackage{}, err
+			}
+		}
+		for _, method := range iface.methods {
+			if method.isDefault {
+				if err := program.emitInterfaceDefault(&source, method, storage); err != nil {
+					return emittedObjectPackage{}, err
+				}
+			}
+		}
+	}
 	for _, class := range program.layout {
 		if class.file.Package != name {
 			continue

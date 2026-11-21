@@ -69,6 +69,7 @@ func (program *javaObjectProgram) emitClass(out *strings.Builder, class *javaObj
 			name, objectViewName(ancestor), program.objectGoType(ancestor.declaration.Symbol), view)
 	}
 	program.emitObjectIdentity(out, class, name)
+	class.emitInterfaceMarkers(out, name)
 
 	ctx := javaObjectContext{program: program, class: class, controlID: new(int)}
 	if len(class.initializers) > 0 {
@@ -101,9 +102,13 @@ func (program *javaObjectProgram) emitClass(out *strings.Builder, class *javaObj
 		}
 	}
 	if class.checksErrors {
-		fmt.Fprintf(out, "\nfunc %s[T any](value T, failure error) T {\n\tif failure != nil {\n\t\tthrow failure\n\t}\n\treturn value\n}\n", class.checkedResultName())
+		emitJavaCheckedResult(out, class.checkedResultName())
 	}
 	return nil
+}
+
+func emitJavaCheckedResult(out *strings.Builder, name string) {
+	fmt.Fprintf(out, "\nfunc %s[T any](value T, failure error) T {\n\tif failure != nil {\n\t\tthrow failure\n\t}\n\treturn value\n}\n", name)
 }
 
 func (class *javaObjectClass) checkedResultName() string {
@@ -113,6 +118,7 @@ func (class *javaObjectClass) checkedResultName() string {
 type javaObjectContext struct {
 	program   *javaObjectProgram
 	class     *javaObjectClass
+	iface     *javaInterface
 	arguments map[string]string
 	caught    map[string]string
 	locals    map[string]string
@@ -129,6 +135,13 @@ func (ctx javaObjectContext) emitConstructor(out *strings.Builder, method *javaO
 	ctx.arguments = objectParameterNames(declaration.Parameters)
 	allocator := ctx.class.storageName(method.allocatorName())
 	fmt.Fprintf(out, "\nfunc %s(%s) *%s {\n\tthis := new(%s)\n", allocator, parameters, name, name)
+	for _, interfaceName := range slices.Sorted(maps.Keys(ctx.class.interfaces)) {
+		iface := ctx.class.interfaces[interfaceName]
+		if iface.hasAssertions {
+			ctx.program.runtime = true
+			fmt.Fprintf(out, "\t%s\n", iface.assertionStatus().enabled())
+		}
+	}
 	if ctx.class.parent != nil {
 		out.WriteString("\tthis.GppJavaBindOwner(this)\n")
 	}
@@ -209,7 +222,7 @@ func (ctx javaObjectContext) emitMethod(out *strings.Builder, method *javaObject
 		bodyName = method.goName
 	}
 	bodyResult := result
-	hasTry := declaration.Body.containsTry()
+	hasTry := method.defaultMethod == nil && declaration.Body.containsTry()
 	if hasTry && declaration.Result != "void" {
 		bodyResult = " (javaResult " + ctx.program.objectGoType(declaration.Result) + ")"
 	}
@@ -218,11 +231,15 @@ func (ctx javaObjectContext) emitMethod(out *strings.Builder, method *javaObject
 	if hasTry {
 		ctx.emitJavaReturnBoundary(out, declaration.Result)
 	}
-	if err := ctx.emitStatements(out, declaration.Body, declaration.Result); err != nil {
-		return err
-	}
-	if declaration.Result != "void" && (hasTry || declaration.Body.containsStatement(needsJavaControlFlowTerminal)) {
-		out.WriteString("\tpanic(\"Java method completed without a result\")\n")
+	if method.defaultMethod != nil {
+		fmt.Fprintf(out, "\t%s%s\n", returnKeyword(result), ctx.defaultCall(method.defaultMethod, "this", arguments))
+	} else {
+		if err := ctx.emitStatements(out, declaration.Body, declaration.Result); err != nil {
+			return err
+		}
+		if declaration.Result != "void" && (hasTry || declaration.Body.containsStatement(needsJavaControlFlowTerminal)) {
+			out.WriteString("\tpanic(\"Java method completed without a result\")\n")
+		}
 	}
 	out.WriteString("}\n")
 	if ctx.class.crossPackageDescendant && method.public && bodyName != method.goName {
@@ -461,6 +478,9 @@ func (ctx javaObjectContext) field(expression *JavaExpression) (string, error) {
 	if !found || expression.Static || (expression.Receiver != "this" && expression.Receiver != "super") {
 		return "", fmt.Errorf("unsupported field access %s", expression.Symbol)
 	}
+	if ctx.class == nil {
+		return "", fmt.Errorf("unsupported instance field access from Java interface %s", expression.Symbol)
+	}
 	if field.class.file.Package != ctx.class.file.Package {
 		return "", fmt.Errorf("cross-package field access requires a Java access bridge for %s", expression.Symbol)
 	}
@@ -472,6 +492,9 @@ func (ctx javaObjectContext) field(expression *JavaExpression) (string, error) {
 }
 
 func (ctx javaObjectContext) invoke(expression *JavaExpression) (string, error) {
+	if method := ctx.program.interfaceMethods[expression.Symbol]; method != nil {
+		return ctx.invokeInterface(expression, method)
+	}
 	receiverClass, _, _ := strings.Cut(expression.Symbol, "#")
 	if wrapperPrimitive(receiverClass) != "" || receiverClass == javaNumberType {
 		return ctx.program.primitiveLowering.wrapperCall(expression, ctx.expression)
@@ -510,7 +533,7 @@ func (ctx javaObjectContext) invoke(expression *JavaExpression) (string, error) 
 	if callee != nil && expression.Target != nil && ctx.program.classes[expression.Target.Type] != nil && callee.public {
 		return ctx.invokeReference(expression, callee)
 	}
-	if callee == nil || callee.declaration.Name == "<init>" ||
+	if callee == nil || ctx.class == nil || callee.declaration.Name == "<init>" ||
 		(expression.Receiver != "this" && expression.Receiver != "super") {
 		return "", fmt.Errorf("unsupported Java method invocation %s", expression.Symbol)
 	}

@@ -84,6 +84,13 @@ func (program javaObjectProgram) emitPackage(name string) (emittedObjectPackage,
 	program.pkg = name
 	program.imports = map[string]string{}
 	var source strings.Builder
+	for _, iface := range program.interfaceLayout {
+		if iface.storagePackage == name {
+			if err := program.emitInterface(&source, iface); err != nil {
+				return emittedObjectPackage{}, err
+			}
+		}
+	}
 	for _, class := range program.layout {
 		if class.storagePackage != name {
 			continue

@@ -13,6 +13,9 @@ func (program *javaObjectProgram) objectGoType(javaType string) string {
 	if class := program.classes[javaType]; class != nil {
 		return "*" + program.classReference(class, class.declaration.Name)
 	}
+	if iface := program.interfaces[javaType]; iface != nil {
+		return program.interfaceReference(iface, iface.declaration.Name)
+	}
 	goType := program.mappedObjectType(javaType)
 	program.runtime = program.runtime || strings.Contains(goType, "javart.")
 	return goType
@@ -27,6 +30,9 @@ func (program *javaObjectProgram) mappedObjectType(javaType string) string {
 	}
 	if class := program.classes[javaType]; class != nil {
 		return "*" + class.declaration.Name
+	}
+	if iface := program.interfaces[javaType]; iface != nil {
+		return iface.declaration.Name
 	}
 	if javaType == javaAutoCloseable {
 		return "javart.AutoCloseable"
@@ -67,7 +73,7 @@ func (ctx javaObjectContext) newString(expression *JavaExpression) (string, erro
 			return "", err
 		}
 		ctx.program.runtime = true
-		return ctx.checkedRuntimeCall("javart.StringCopy(" + value + ")"), nil
+		return ctx.checkedRuntimeCall("javart.StringCopy("+value+")", javaStringType), nil
 	default:
 		return "", fmt.Errorf("unsupported Java allocation %s", expression.Symbol)
 	}
@@ -103,10 +109,15 @@ func (ctx javaObjectContext) invokeString(expression *JavaExpression) (string, e
 	}
 	ctx.program.runtime = true
 	call := "javart." + method.name + "(" + strings.Join(arguments, ", ") + ")"
-	return ctx.checkedRuntimeCall(call), nil
+	return ctx.checkedRuntimeCall(call, expression.Type), nil
 }
 
-func (ctx javaObjectContext) checkedRuntimeCall(call string) string {
+func (ctx javaObjectContext) checkedRuntimeCall(call, resultType string) string {
+	if ctx.iface != nil {
+		ctx.iface.checksErrors = true
+		return fmt.Sprintf("func() %s {\n\tjavaValue, javaFailure := %s\n\treturn %s(javaValue, javaFailure)\n}()",
+			ctx.program.objectGoType(resultType), call, ctx.iface.checkedResultName())
+	}
 	ctx.class.checksErrors = true
 	return ctx.class.checkedResultName() + "(" + call + ")"
 }

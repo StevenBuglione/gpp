@@ -32,6 +32,9 @@ func EmitGPP(report Report) (string, error) {
 func usesObjectEmitter(files []SourceFile) bool {
 	for _, file := range files {
 		for _, declaration := range file.Declarations {
+			if declaration.Owner == "" && declaration.Kind == "INTERFACE" {
+				return true
+			}
 			if declaration.Kind == "METHOD" && declaration.Name == "<init>" &&
 				!slices.Contains(declaration.Modifiers, "PRIVATE") {
 				return true

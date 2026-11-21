@@ -3,6 +3,7 @@ package javaport
 import (
 	"fmt"
 	"go/token"
+	"maps"
 	"slices"
 	"strings"
 )
@@ -18,6 +19,7 @@ type javaObjectClass struct {
 	constructors           []*javaObjectMethod
 	methods                []*javaObjectMethod
 	virtual                map[string]*javaObjectMethod
+	interfaces             map[string]*javaInterface
 	embed                  bool
 	checksErrors           bool
 	closeable              bool
@@ -34,6 +36,7 @@ type javaObjectMethod struct {
 	slot             *javaObjectMethod
 	overridden       bool
 	crossPackageInit bool
+	defaultMethod    *javaInterfaceMethod
 }
 
 type javaObjectField struct {
@@ -53,6 +56,9 @@ type javaObjectProgram struct {
 	imports           map[string]string
 	runtime           bool
 	primitiveLowering primitiveLowering
+	interfaces        map[string]*javaInterface
+	interfaceLayout   []*javaInterface
+	interfaceMethods  map[string]*javaInterfaceMethod
 }
 
 func emitJavaObjects(report Report) (string, error) {
@@ -72,6 +78,7 @@ func prepareJavaObjects(files []SourceFile) (*javaObjectProgram, error) {
 	program := &javaObjectProgram{
 		classes: map[string]*javaObjectClass{}, methods: map[string]*javaObjectMethod{},
 		fields: map[string]javaObjectField{}, pending: map[string]bool{}, exports: map[string]map[string]bool{},
+		interfaces: map[string]*javaInterface{}, interfaceMethods: map[string]*javaInterfaceMethod{},
 	}
 	var classes []*javaObjectClass
 	for _, file := range files {
@@ -82,7 +89,16 @@ func prepareJavaObjects(files []SourceFile) (*javaObjectProgram, error) {
 			program.exports[file.Package] = map[string]bool{}
 		}
 		for _, declaration := range file.Declarations {
-			if declaration.Owner != "" || declaration.Kind != "CLASS" {
+			if declaration.Owner != "" {
+				continue
+			}
+			if declaration.Kind == "INTERFACE" {
+				if err := program.addInterface(file, declaration); err != nil {
+					return nil, unsupportedSource(file, declaration, err.Error())
+				}
+				continue
+			}
+			if declaration.Kind != "CLASS" {
 				continue
 			}
 			if !token.IsExported(declaration.Name) || !token.IsIdentifier(declaration.Name) ||
@@ -101,12 +117,18 @@ func prepareJavaObjects(files []SourceFile) (*javaObjectProgram, error) {
 	}
 	for _, file := range files {
 		for _, declaration := range file.Declarations {
-			if declaration.Kind == "CLASS" && declaration.Owner == "" {
+			if (declaration.Kind == "CLASS" || declaration.Kind == "INTERFACE") && declaration.Owner == "" {
 				continue
 			}
 			owner := declaration.Owner
 			if declaration.Kind == "BLOCK" {
 				owner = declaration.InitializerOwner
+			}
+			if iface := program.interfaces[owner]; iface != nil {
+				if err := program.addInterfaceMember(iface, declaration); err != nil {
+					return nil, unsupportedSource(file, declaration, err.Error())
+				}
+				continue
 			}
 			class, ok := program.classes[owner]
 			if !ok || !onlySourceAnnotations(declaration) {
@@ -115,6 +137,11 @@ func prepareJavaObjects(files []SourceFile) (*javaObjectProgram, error) {
 			if err := program.addMember(class, declaration); err != nil {
 				return nil, unsupportedSource(file, declaration, err.Error())
 			}
+		}
+	}
+	for _, iface := range program.interfaceLayout {
+		if err := program.layoutInterface(iface); err != nil {
+			return nil, err
 		}
 	}
 	for _, class := range classes {
@@ -273,9 +300,15 @@ func (program *javaObjectProgram) layoutClass(class *javaObjectClass) error {
 	if len(class.constructors) == 0 {
 		return unsupportedSource(class.file, declaration, "missing attributed Java constructor")
 	}
+	class.interfaces = map[string]*javaInterface{}
 	for _, supertype := range declaration.Supertypes {
 		if supertype == javaAutoCloseable {
 			class.closeable = true
+			continue
+		}
+		if iface := program.interfaces[supertype]; iface != nil {
+			maps.Copy(class.interfaces, iface.supers)
+			class.closeable = class.closeable || iface.closeable
 			continue
 		}
 		if class.parent != nil || program.classes[supertype] == nil {
@@ -291,6 +324,7 @@ func (program *javaObjectProgram) layoutClass(class *javaObjectClass) error {
 			class.parent.embed = true
 		}
 		class.closeable = class.closeable || class.parent.closeable
+		maps.Copy(class.interfaces, class.parent.interfaces)
 	}
 	class.virtual = map[string]*javaObjectMethod{}
 	if class.parent != nil {
@@ -302,20 +336,17 @@ func (program *javaObjectProgram) layoutClass(class *javaObjectClass) error {
 		if !method.public {
 			continue
 		}
-		method.slot = method
-		if inherited := class.virtual[method.goName]; inherited != nil {
-			if methodSignatureKey(method.declaration) != methodSignatureKey(inherited.declaration) {
-				return unsupportedSource(class.file, method.declaration, "overloaded or colliding inherited Go method")
-			}
-			method.slot = inherited.slot
-			method.slot.overridden = true
+		if err := class.addVirtualMethod(method); err != nil {
+			return unsupportedSource(class.file, method.declaration, err.Error())
 		}
-		class.virtual[method.goName] = method
+	}
+	if err := program.completeInterfaceMethods(class); err != nil {
+		return unsupportedSource(class.file, declaration, err.Error())
 	}
 	if class.closeable && class.virtual["GppAutoCloseable"] != nil {
 		return unsupportedSource(class.file, declaration, "Go AutoCloseable marker collides with method GppAutoCloseable")
 	}
-	for _, method := range []string{"GppJavaBindOwner", "GppJavaOwner", "GppJavaCanonicalObject", "GppJavaReferenceView"} {
+	for _, method := range []string{"GppJavaBindOwner", "GppJavaOwner", "GppJavaCanonicalObject", "GppJavaReferenceView", javaImplementsBridge} {
 		if class.virtual[method] != nil {
 			return unsupportedSource(class.file, declaration, "Go reference bridge collides with method "+method)
 		}
@@ -337,6 +368,19 @@ func (program *javaObjectProgram) layoutClass(class *javaObjectClass) error {
 	}
 	delete(program.pending, declaration.Symbol)
 	program.layout = append(program.layout, class)
+	return nil
+}
+
+func (class *javaObjectClass) addVirtualMethod(method *javaObjectMethod) error {
+	method.slot = method
+	if inherited := class.virtual[method.goName]; inherited != nil {
+		if methodSignatureKey(method.declaration) != methodSignatureKey(inherited.declaration) {
+			return fmt.Errorf("overloaded or colliding inherited Go method")
+		}
+		method.slot = inherited.slot
+		method.slot.overridden = true
+	}
+	class.virtual[method.goName] = method
 	return nil
 }
 

@@ -13,6 +13,14 @@ type ArrayType struct {
     ancestors []reflect.Type
     rank int
     acceptsElement func(any) bool
+    interfaceType ArrayInterfaceType
+}
+
+// ArrayInterfaceType supplies nominal information for a translated interface.
+// Go reflection alone cannot distinguish unrelated Java interface method sets.
+type ArrayInterfaceType struct {
+    Name string
+    Supers []string
 }
 
 func ArrayTypeOf[T any](rank int, ancestors ...any) ArrayType {
@@ -23,6 +31,14 @@ func ArrayTypeOf[T any](rank int, ancestors ...any) ArrayType {
         },
     }
     for _, ancestor := range ancestors {
+        if iface, ok := ancestor.(ArrayInterfaceType); ok {
+            arrayType.interfaceType = iface
+            arrayType.acceptsElement = func(value any) bool {
+                _, matched := interfaceView[T](value, iface.Name)
+                return matched
+            }
+            continue
+        }
         arrayType.ancestors = append(arrayType.ancestors, reflect.TypeOf(ancestor))
     }
     return arrayType
@@ -46,7 +62,24 @@ func (source ArrayType) assignableTo(target ArrayType) bool {
     if !source.referenceElement() || !target.referenceElement() {
         return false
     }
+    if target.interfaceType.Name != "" {
+        return source.assignableToInterface(target)
+    }
     return source.element.AssignableTo(target.element) || slices.Contains(source.ancestors, target.element)
+}
+
+func (source ArrayType) assignableToInterface(target ArrayType) bool {
+    name := target.interfaceType.Name
+    if source.interfaceType.Name != "" {
+        return source.interfaceType.Name == name || slices.Contains(source.interfaceType.Supers, name)
+    }
+    if source.element == reflect.TypeFor[any]() || isBundledJavaType(source.element) {
+        return false
+    }
+    if witness, ok := reflect.Zero(source.element).Interface().(interface{ GppJavaImplementsInterface(string) bool }); ok {
+        return witness.GppJavaImplementsInterface(name)
+    }
+    return source.element.AssignableTo(target.element)
 }
 
 // Array is one Java array object. Its pointer identity is shared by covariant

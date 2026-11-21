@@ -2,6 +2,8 @@ package javaport
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -51,6 +53,13 @@ func (ctx javaObjectContext) arrayTypeCall(javaType, method string, arguments ..
 		for ancestor := class.parent; ancestor != nil; ancestor = ancestor.parent {
 			args = append(args, "("+ctx.program.objectGoType(ancestor.declaration.Symbol)+")(nil)")
 		}
+	}
+	if iface := ctx.program.interfaces[leaf]; iface != nil {
+		supers := slices.Sorted(maps.Keys(iface.supers))
+		for index, name := range supers {
+			supers[index] = strconv.Quote(name)
+		}
+		args = append(args, "javart.ArrayInterfaceType{Name: "+strconv.Quote(leaf)+", Supers: []string{"+strings.Join(supers, ", ")+"}}")
 	}
 	ctx.program.runtime = true
 	return "javart." + method + "[" + ctx.program.objectGoType(leaf) + "](" + strings.Join(args, ", ") + ")", nil
