@@ -2,17 +2,23 @@ import com.sun.source.tree.ArrayAccessTree;
 import com.sun.source.tree.AssignmentTree;
 import com.sun.source.tree.BinaryTree;
 import com.sun.source.tree.BlockTree;
+import com.sun.source.tree.BreakTree;
 import com.sun.source.tree.CatchTree;
 import com.sun.source.tree.ClassTree;
 import com.sun.source.tree.CompilationUnitTree;
 import com.sun.source.tree.ConditionalExpressionTree;
+import com.sun.source.tree.ContinueTree;
+import com.sun.source.tree.DoWhileLoopTree;
+import com.sun.source.tree.EnhancedForLoopTree;
 import com.sun.source.tree.ExportsTree;
 import com.sun.source.tree.ExpressionStatementTree;
 import com.sun.source.tree.ExpressionTree;
+import com.sun.source.tree.ForLoopTree;
 import com.sun.source.tree.IdentifierTree;
 import com.sun.source.tree.InstanceOfTree;
 import com.sun.source.tree.IfTree;
 import com.sun.source.tree.ImportTree;
+import com.sun.source.tree.LabeledStatementTree;
 import com.sun.source.tree.LiteralTree;
 import com.sun.source.tree.MemberReferenceTree;
 import com.sun.source.tree.MemberSelectTree;
@@ -35,6 +41,7 @@ import com.sun.source.tree.UnaryTree;
 import com.sun.source.tree.UnionTypeTree;
 import com.sun.source.tree.UsesTree;
 import com.sun.source.tree.VariableTree;
+import com.sun.source.tree.WhileLoopTree;
 import com.sun.source.util.JavacTask;
 import com.sun.source.util.TreePath;
 import com.sun.source.util.TreePathScanner;
@@ -303,6 +310,28 @@ class JavaSourceAnalysis {
                 if (conditional.getElseStatement() != null) {
                     record += ",\"else\":" + statementRecord(new TreePath(path, conditional.getElseStatement()));
                 }
+            } else if (statement instanceof WhileLoopTree loop) {
+                expression = loop.getCondition();
+                record += ",\"nested\":" + statementRecord(new TreePath(path, loop.getStatement()));
+            } else if (statement instanceof DoWhileLoopTree loop) {
+                expression = loop.getCondition();
+                record += ",\"nested\":" + statementRecord(new TreePath(path, loop.getStatement()));
+            } else if (statement instanceof ForLoopTree loop) {
+                expression = loop.getCondition();
+                record += ",\"loopInit\":" + bodyRecord(path, loop.getInitializer()) +
+                    ",\"loopUpdate\":" + bodyRecord(path, loop.getUpdate()) +
+                    ",\"nested\":" + statementRecord(new TreePath(path, loop.getStatement()));
+            } else if (statement instanceof EnhancedForLoopTree loop) {
+                expression = loop.getExpression();
+                record += ",\"variable\":" + variableRecord(new TreePath(path, loop.getVariable())) +
+                    ",\"nested\":" + statementRecord(new TreePath(path, loop.getStatement()));
+            } else if (statement instanceof LabeledStatementTree labeled) {
+                record += ",\"label\":" + quote(labeled.getLabel().toString()) +
+                    ",\"nested\":" + statementRecord(new TreePath(path, labeled.getStatement()));
+            } else if (statement instanceof BreakTree stopped && stopped.getLabel() != null) {
+                record += ",\"label\":" + quote(stopped.getLabel().toString());
+            } else if (statement instanceof ContinueTree continued && continued.getLabel() != null) {
+                record += ",\"label\":" + quote(continued.getLabel().toString());
             }
             if (expression != null) {
                 record += ",\"expression\":" + executableExpression(new TreePath(path, expression));

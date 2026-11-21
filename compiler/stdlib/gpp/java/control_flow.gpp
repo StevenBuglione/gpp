@@ -74,11 +74,33 @@ func finishCleanup(pending any, cleanup func()) {
 
 func isJavaCompletion(value any) bool {
     switch value.(type) {
-    case raisedException, interface{ javaReturnSignal() }:
+    case raisedException, branchDestination, interface{ javaReturnSignal() }:
         return true
     default:
         return false
     }
+}
+
+type branchDestination int
+
+// Branch transfers control across a generated try, catch or finally function.
+func Branch(destination int) {
+    panic(branchDestination(destination))
+}
+
+// RecoverBranch runs a translated region and resolves only branch completion.
+func RecoverBranch(region func()) (destination int) {
+    defer func() {
+        if recovered := recover(); recovered != nil {
+            branch, ok := recovered.(branchDestination)
+            if !ok {
+                panic(recovered)
+            }
+            destination = int(branch)
+        }
+    }()
+    region()
+    return 0
 }
 
 type returnValue[T any] struct {

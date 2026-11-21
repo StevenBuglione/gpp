@@ -154,6 +154,10 @@ type JavaStatement struct {
 	Variable   *JavaVariable   `json:"variable,omitempty"`
 	Then       *JavaStatement  `json:"then,omitempty"`
 	Else       *JavaStatement  `json:"else,omitempty"`
+	Nested     *JavaStatement  `json:"nested,omitempty"`
+	LoopInit   *MethodBody     `json:"loopInit,omitempty"`
+	LoopUpdate *MethodBody     `json:"loopUpdate,omitempty"`
+	Label      string          `json:"label,omitempty"`
 	Line       int64           `json:"line"`
 	Column     int64           `json:"column"`
 }

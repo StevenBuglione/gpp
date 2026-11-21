@@ -32,20 +32,25 @@ var javaCatchTypes = map[string]string{
 }
 
 func (body *MethodBody) containsTry() bool {
+	return body.containsStatement(func(kind string) bool { return kind == "TRY" })
+}
+
+func (body *MethodBody) containsStatement(matches func(string) bool) bool {
 	if body == nil {
 		return false
 	}
 	for _, statement := range body.Code {
-		if statement.containsTry() {
+		if statement.containsStatement(matches) {
 			return true
 		}
 	}
 	return false
 }
 
-func (statement *JavaStatement) containsTry() bool {
-	return statement != nil && (statement.Kind == "TRY" || statement.Body.containsTry() ||
-		statement.Then.containsTry() || statement.Else.containsTry())
+func (statement *JavaStatement) containsStatement(matches func(string) bool) bool {
+	return statement != nil && (matches(statement.Kind) || statement.Body.containsStatement(matches) ||
+		statement.Then.containsStatement(matches) || statement.Else.containsStatement(matches) ||
+		statement.Nested.containsStatement(matches))
 }
 
 func (ctx javaObjectContext) emitJavaReturnBoundary(out *strings.Builder, result string) {
@@ -81,7 +86,8 @@ func (ctx javaObjectContext) ifStatement(statement JavaStatement, result string)
 
 func (ctx javaObjectContext) tryStatement(statement JavaStatement, result string) (string, error) {
 	ctx.program.runtime = true
-	ctx.inTry = true
+	scope := &javaTryBranches{parent: ctx.tryScope}
+	ctx.tryScope = scope
 	var code strings.Builder
 	code.WriteString("javart.Try(func() {\n")
 	resourceContext := ctx.localScope()
@@ -125,7 +131,7 @@ func (ctx javaObjectContext) tryStatement(statement JavaStatement, result string
 		code.WriteString("}")
 	}
 	code.WriteString(")")
-	return code.String(), nil
+	return scope.wrap(code.String()), nil
 }
 
 func (ctx javaObjectContext) emitJavaCatch(code *strings.Builder, handler JavaCatch, result string) error {

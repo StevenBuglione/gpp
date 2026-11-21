@@ -66,14 +66,16 @@ func (program *javaObjectProgram) emitClass(out *strings.Builder, class *javaObj
 	}
 	program.emitObjectIdentity(out, class, name)
 
-	ctx := javaObjectContext{program: program, class: class}
+	ctx := javaObjectContext{program: program, class: class, controlID: new(int)}
 	if len(class.initializers) > 0 {
 		fmt.Fprintf(out, "\nfunc (this *%s) javaInitFields() {\n", name)
 		for _, initializer := range class.initializers {
 			if initializer.Kind == "BLOCK" {
+				out.WriteString("\t{\n")
 				if err := ctx.emitStatements(out, initializer.Body, "void"); err != nil {
 					return unsupportedSource(class.file, initializer, err.Error())
 				}
+				out.WriteString("\t}\n")
 			} else {
 				value, err := ctx.converted(initializer.Initializer, initializer.Type)
 				if err != nil {
@@ -110,7 +112,9 @@ type javaObjectContext struct {
 	arguments map[string]string
 	caught    map[string]string
 	locals    map[string]string
-	inTry     bool
+	tryScope  *javaTryBranches
+	control   *javaControlTarget
+	controlID *int
 }
 
 func (ctx javaObjectContext) emitConstructor(out *strings.Builder, method *javaObjectMethod) error {
@@ -210,7 +214,7 @@ func (ctx javaObjectContext) emitMethod(out *strings.Builder, method *javaObject
 	if err := ctx.emitStatements(out, declaration.Body, declaration.Result); err != nil {
 		return err
 	}
-	if hasTry && declaration.Result != "void" {
+	if declaration.Result != "void" && (hasTry || declaration.Body.containsStatement(isJavaLoop)) {
 		out.WriteString("\tpanic(\"Java method completed without a result\")\n")
 	}
 	out.WriteString("}\n")
@@ -254,10 +258,13 @@ func (ctx javaObjectContext) emitErrorAdapter(out *strings.Builder, receiver, na
 }
 
 func (ctx javaObjectContext) emitStatements(out *strings.Builder, body *MethodBody, result string) error {
+	return ctx.localScope().emitStatementsInScope(out, body, result)
+}
+
+func (ctx javaObjectContext) emitStatementsInScope(out *strings.Builder, body *MethodBody, result string) error {
 	if body == nil {
 		return fmt.Errorf("missing attributed statement sequence")
 	}
-	ctx = ctx.localScope()
 	for index, statement := range body.Code {
 		if statement.Kind == "VARIABLE" && statement.Variable != nil {
 			name := fmt.Sprintf("javaLocal%d_%d", len(ctx.locals), index)
@@ -280,14 +287,14 @@ func (ctx javaObjectContext) statement(statement JavaStatement, result string) (
 	switch statement.Kind {
 	case "RETURN":
 		if result == "void" && expression == nil {
-			if ctx.inTry {
+			if ctx.tryScope != nil {
 				return "javart.Return(struct{}{})", nil
 			}
 			return "return", nil
 		}
 		if expression != nil {
 			value, err := ctx.converted(expression, result)
-			if ctx.inTry && err == nil {
+			if ctx.tryScope != nil && err == nil {
 				return "javart.Return[" + ctx.program.objectGoType(result) + "](" + value + ")", nil
 			}
 			return "return " + value, err
@@ -304,6 +311,14 @@ func (ctx javaObjectContext) statement(statement JavaStatement, result string) (
 		return "{\n" + body.String() + "}", nil
 	case "IF":
 		return ctx.ifStatement(statement, result)
+	case "WHILE_LOOP", "DO_WHILE_LOOP", "FOR_LOOP", "ENHANCED_FOR_LOOP":
+		return ctx.loopStatement(statement, result, "")
+	case "LABELED_STATEMENT":
+		return ctx.labeledStatement(statement, result)
+	case "BREAK", "CONTINUE":
+		return ctx.loopBranch(statement)
+	case "EMPTY_STATEMENT":
+		return "", nil
 	case "EXPRESSION_STATEMENT":
 		if expression == nil {
 			break
@@ -311,17 +326,11 @@ func (ctx javaObjectContext) statement(statement JavaStatement, result string) (
 		if expression.Kind == "METHOD_INVOCATION" {
 			return ctx.invoke(expression)
 		}
-		if target := arrayAssignmentTarget(expression); target != nil {
-			return ctx.arrayAssignment(target, expression.Right)
-		}
-		if expression.Kind == "ASSIGNMENT" && expression.Left != nil && !expression.Left.Static && expression.Right != nil &&
-			(expression.Left.Kind == "FIELD" || expression.Left.Kind == "LOCAL_VARIABLE") {
-			target, err := ctx.expression(expression.Left)
-			if err != nil {
-				return "", err
-			}
-			value, err := ctx.converted(expression.Right, expression.Left.Type)
-			return target + " = " + value, err
+		switch expression.Kind {
+		case "ASSIGNMENT":
+			return ctx.assignment(expression, false)
+		case "PREFIX_INCREMENT", "PREFIX_DECREMENT", "POSTFIX_INCREMENT", "POSTFIX_DECREMENT":
+			return ctx.increment(expression, false)
 		}
 	}
 	return "", fmt.Errorf("unsupported statement %s", statement.Kind)
@@ -335,10 +344,14 @@ func (ctx javaObjectContext) converted(expression *JavaExpression, target string
 	if err != nil {
 		return "", err
 	}
+	return ctx.convertValue(value, expression.Type, target)
+}
+
+func (ctx javaObjectContext) convertValue(value, source, target string) (string, error) {
 	if _, primitive := primitiveTypes[target]; !primitive {
-		return ctx.convertReference(value, expression.Type, target)
+		return ctx.convertReference(value, source, target)
 	}
-	return ctx.program.primitiveLowering.convertPrimitiveContext(value, expression.Type, target)
+	return ctx.program.primitiveLowering.convertPrimitiveContext(value, source, target)
 }
 
 func (ctx javaObjectContext) expression(expression *JavaExpression) (string, error) {
@@ -382,11 +395,6 @@ func (ctx javaObjectContext) expression(expression *JavaExpression) (string, err
 		return ctx.newArray(expression)
 	case "ARRAY_ACCESS":
 		return ctx.arrayAccess(expression)
-	case "ASSIGNMENT":
-		if target := arrayAssignmentTarget(expression); target != nil {
-			return ctx.arrayAssignment(target, expression.Right)
-		}
-		return "", fmt.Errorf("unsupported Java assignment expression")
 	case "ARRAY_LENGTH":
 		if expression.Target == nil || ctx.arrayElementType(expression.Target.Type) == "" {
 			return "", fmt.Errorf("unsupported Java array length expression")
@@ -400,6 +408,10 @@ func (ctx javaObjectContext) expression(expression *JavaExpression) (string, err
 		return ctx.cast(expression)
 	case "INSTANCE_OF":
 		return ctx.instanceOf(expression)
+	case "ASSIGNMENT":
+		return ctx.assignment(expression, true)
+	case "PREFIX_INCREMENT", "PREFIX_DECREMENT", "POSTFIX_INCREMENT", "POSTFIX_DECREMENT":
+		return ctx.increment(expression, true)
 	case "UNARY_PLUS", "UNARY_MINUS", "BITWISE_COMPLEMENT", "LOGICAL_COMPLEMENT":
 		return ctx.program.primitiveLowering.unary(expression, ctx.expression)
 	case "LEFT_SHIFT", "RIGHT_SHIFT", "UNSIGNED_RIGHT_SHIFT":
