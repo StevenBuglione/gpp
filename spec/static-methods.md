@@ -606,9 +606,18 @@ Go callers can use generated static methods and typed field accessors such as
 `GppStatic_Defaults_Endpoint`, `GppGetStatic_Defaults_Port`, and
 `GppSetStatic_Defaults_Port`. The accessors run the same initialization protocol.
 
-This syntax currently uses class-qualified field references. Compile-time
-constant fields, interface initialization, and static field annotation metadata
-require additional Java compatibility work.
+Static fields can also be used by simple name in the class's method and
+initializer bodies. The field's declaring class owns its storage, even when a
+subclass inherits the code that references it. A local or parameter shadows
+the field only in its lexical scope.
+
+A static field initializer or block can assign a later field by simple name.
+Reading a later field by simple name, or reading the field being initialized
+by simple name, is a compile-time error. A class-qualified reference can
+observe the field's current value during initialization.
+
+Compile-time constant fields, interface initialization, and static field
+annotation metadata require additional Java compatibility work.
 
 ---
 

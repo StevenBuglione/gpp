@@ -452,6 +452,19 @@ func functionSource(function *FunctionDecl) string {
 	return ""
 }
 
+// offsetTokenPositions locates freshly lexed tokens within a larger source.
+func offsetTokenPositions(tokens []Token, origin Span) {
+	for index := range tokens {
+		span := &tokens[index].Span
+		span.Start += origin.Start
+		span.End += origin.Start
+		if span.Line == 1 {
+			span.Column += origin.Column - 1
+		}
+		span.Line += origin.Line - 1
+	}
+}
+
 func rebaseTokens(tokens []Token, source string, offset int) []Token {
 	result := make([]Token, len(tokens))
 	copy(result, tokens)

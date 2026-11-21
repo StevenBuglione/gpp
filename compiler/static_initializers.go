@@ -151,7 +151,7 @@ func emitStaticInitialization(out *strings.Builder, class *ClassDecl, classes ma
 	if len(items) == 0 {
 		return nil
 	}
-	method, err := buildClassInitializerMethod(class, items, class.Name, staticInitializerBody, true)
+	method, err := buildClassInitializerMethod(class, items, staticFieldScopePrefix+class.Name, staticInitializerBody, true)
 	if err != nil {
 		return err
 	}
@@ -202,7 +202,7 @@ func validateStaticInitializers(class *ClassDecl, names map[string]bool) error {
 			return problem
 		}
 	}
-	return nil
+	return validateStaticFieldOrder(class)
 }
 
 type staticFieldReference struct {
@@ -225,6 +225,11 @@ func (ref staticFieldReference) accessor(operation string) string {
 func resolveStaticField(receiver, name string, context constructorContext) (staticFieldReference, bool) {
 	target, exists := context.Targets[receiver]
 	if !exists {
+		if class, bound := strings.CutPrefix(receiver, staticFieldScopePrefix); bound {
+			target, exists = context.Targets[class]
+		}
+	}
+	if !exists {
 		return staticFieldReference{}, false
 	}
 	return findStaticField(target.Class, name, target.Qualifier, classesForClass(context, target.Class), map[*ClassDecl]bool{})
@@ -233,6 +238,11 @@ func resolveStaticField(receiver, name string, context constructorContext) (stat
 func findStaticField(class *ClassDecl, name, qualifier string, classes map[string]*ClassDecl, visiting map[*ClassDecl]bool) (staticFieldReference, bool) {
 	if class == nil || visiting[class] {
 		return staticFieldReference{}, false
+	}
+	for _, field := range class.Fields {
+		if field.Name == name {
+			return staticFieldReference{}, false
+		}
 	}
 	for index := range class.StaticFields {
 		if class.StaticFields[index].Name == name {

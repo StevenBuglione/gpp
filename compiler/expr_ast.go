@@ -820,14 +820,24 @@ func parseInterpolatedString(token Token) (ExprNode, error) {
 				return nil, err
 			}
 		}
-		expressionText = strings.TrimSpace(expressionText)
-		if expressionText == "" {
+		trimmed := strings.TrimSpace(expressionText)
+		if trimmed == "" {
 			return nil, fmt.Errorf("empty interpolation expression")
 		}
-		expressionTokens, err := LexSource("interpolation", expressionText)
+		expressionTokens, err := LexSource("interpolation", trimmed)
 		if err != nil {
 			return nil, err
 		}
+		expressionStart := 1 + index + 2 + strings.Index(expressionText, trimmed)
+		line, column := sourcePosition(token.Text, expressionStart)
+		if line == 1 {
+			column += token.Span.Column - 1
+		}
+		offsetTokenPositions(expressionTokens, Span{
+			Start:  token.Span.Start + expressionStart,
+			Line:   token.Span.Line + line - 1,
+			Column: column,
+		})
 		expression, err := ParseExpressionTokens(expressionTokens)
 		if err != nil {
 			return nil, err

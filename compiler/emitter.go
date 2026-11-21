@@ -1983,9 +1983,15 @@ func emitClass(out *strings.Builder, file *File, class *ClassDecl, context const
 	failureOutputs := make(map[string]bool)
 	delegatingInitializers := make(map[string]bool)
 	instanceErrors := false
+	boundInitializers := map[string]Method{}
 	for _, initializer := range classInitializers(class) {
 		name := methodOutputName(*initializer)
-		parentCalls, err := initializerParentCalls(class, *initializer, classes, context)
+		bound, err := bindImplicitStaticFields(*initializer, class, context)
+		if err != nil {
+			return err
+		}
+		boundInitializers[name] = bound
+		parentCalls, err := initializerParentCalls(class, bound, classes, context)
 		if err != nil {
 			return err
 		}
@@ -2023,8 +2029,18 @@ func emitClass(out *strings.Builder, file *File, class *ClassDecl, context const
 			}
 			continue
 		}
-		emitSourceDirective(out, sourcePath, methodSourceLine(method, class))
 		methodName := methodOutputName(method)
+		if bound, exists := boundInitializers[methodName]; exists {
+			method = bound
+		} else {
+			declaringClass := declaringClassForStaticFieldLookup(class, method, classes)
+			var err error
+			method, err = bindImplicitStaticFields(method, declaringClass, context)
+			if err != nil {
+				return err
+			}
+		}
+		emitSourceDirective(out, sourcePath, methodSourceLine(method, class))
 		exceptionContext := contextForMethod(context, class, method.Name)
 		exceptionContext.CurrentResultAST = methodResultTypeNode(method)
 		if method.Name == "init" {
@@ -3028,6 +3044,10 @@ func methodSourceLine(method Method, class *ClassDecl) int {
 }
 
 func emitStaticMethod(out *strings.Builder, sourcePath string, class *ClassDecl, method Method, context constructorContext, interpolationName string) error {
+	method, err := bindImplicitStaticFields(method, class, context)
+	if err != nil {
+		return err
+	}
 	if direct, handled, err := directStaticMethodSource(class, method, context); handled {
 		if err != nil {
 			return err

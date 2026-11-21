@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 )
 
-const parsedFileCacheVersion = 4
+const parsedFileCacheVersion = 5
 
 type parsedFileCacheEntry struct {
 	Version  int
@@ -381,9 +381,8 @@ func setParsedFileOwners(file, owner *File) {
 			value.Method.Owner = owner
 		case *ClassDecl:
 			value.Owner = owner
-			for index := range value.Fields {
-				value.Fields[index].Owner = owner
-			}
+			attachFieldOwners(owner, value.Fields)
+			attachFieldOwners(owner, value.StaticFields)
 			for index := range value.Methods {
 				value.Methods[index].Owner = owner
 			}
