@@ -87,7 +87,9 @@ gpp migrate java --analyze --release 17 --class-path "$COMPILE_CLASSPATH" src/ma
 ```
 
 The versioned JSON report records source declarations, javac-selected call
-targets, and source diagnostics. Source offsets use UTF-16 code units.
+targets, JPMS directives, typed declaration annotations, and source diagnostics.
+It includes annotation retention and default values, resolved type references,
+and cycles among the selected source packages. Source offsets use UTF-16 code units.
 The command exits with status 1 when javac reports source errors. It only
 reads analysis inputs and consumes generated Java sources from your build.
 
@@ -104,6 +106,19 @@ gpp migrate java --analyze --java "$JAVA_HOME/bin/java" \
 Each checkout's Gradle wrapper compiles the reference modules and prints
 the manifest paths it writes. Use a fresh destination or reuse a clean
 checkout at the script's pinned revision.
+Pass `--inventory` as the third script argument to list the complete
+configured Gradle project graph and its source sets, including parent
+projects and included builds. The manifest is `build/gpp-reference/projects.json`.
+Pass `--all-java` to compile the main and multi-release Java source sets in
+every project that supplies them, and export their compile manifests.
+
+Verify the upstream runtime contracts for annotation aliases, generic
+injection, bean identity, optional classes, configuration precedence, and
+rollback rules with the pinned Boot runtime classpath.
+
+```bash
+./scripts/check-spring-reference.sh boot /tmp/gpp-spring-boot --boot-probe
+```
 
 Use `--emit-gpp` to translate public standalone Java interfaces with
 primitive method signatures, integer or boolean constants, and inheritance\nwithin the selected package. Generated Go marker methods preserve explicit\ninterface membership for derived Java interfaces. The emitter

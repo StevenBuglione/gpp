@@ -1,26 +1,52 @@
 import com.sun.source.tree.ClassTree;
 import com.sun.source.tree.CompilationUnitTree;
+import com.sun.source.tree.ExportsTree;
+import com.sun.source.tree.ExpressionTree;
+import com.sun.source.tree.IdentifierTree;
+import com.sun.source.tree.ImportTree;
 import com.sun.source.tree.MemberReferenceTree;
+import com.sun.source.tree.MemberSelectTree;
 import com.sun.source.tree.MethodInvocationTree;
 import com.sun.source.tree.MethodTree;
+import com.sun.source.tree.ModuleTree;
 import com.sun.source.tree.NewClassTree;
+import com.sun.source.tree.OpensTree;
+import com.sun.source.tree.ProvidesTree;
+import com.sun.source.tree.RequiresTree;
 import com.sun.source.tree.Tree;
+import com.sun.source.tree.UsesTree;
 import com.sun.source.tree.VariableTree;
 import com.sun.source.util.JavacTask;
+import com.sun.source.util.TreePath;
 import com.sun.source.util.TreePathScanner;
 import com.sun.source.util.Trees;
+import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import java.util.TreeMap;
 import java.util.stream.Collectors;
+import javax.lang.model.element.AnnotationMirror;
+import javax.lang.model.element.AnnotationValue;
 import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.ExecutableElement;
+import javax.lang.model.element.Parameterizable;
 import javax.lang.model.element.TypeElement;
+import javax.lang.model.element.TypeParameterElement;
 import javax.lang.model.element.VariableElement;
+import javax.lang.model.type.ArrayType;
+import javax.lang.model.type.DeclaredType;
+import javax.lang.model.type.ExecutableType;
+import javax.lang.model.type.IntersectionType;
+import javax.lang.model.type.TypeKind;
+import javax.lang.model.type.TypeMirror;
+import javax.lang.model.type.TypeVariable;
+import javax.lang.model.type.WildcardType;
 import javax.lang.model.util.Elements;
 import javax.lang.model.util.Types;
 import javax.tools.Diagnostic;
@@ -36,6 +62,7 @@ class JavaSourceAnalysis {
         final Types types;
         final List<String> declarations = new ArrayList<>();
         final List<String> calls = new ArrayList<>();
+        final TreeMap<String, String> typeReferences = new TreeMap<>();
 
         Inventory(CompilationUnitTree unit, Trees trees, Elements elements, Types types) {
             this.unit = unit;
@@ -84,6 +111,57 @@ class JavaSourceAnalysis {
             return super.visitMemberReference(tree, unused);
         }
 
+        @Override
+        public Void visitImport(ImportTree tree, Void unused) {
+            // Unused Java imports do not introduce generated Go dependencies.
+            return null;
+        }
+
+        @Override
+        public Void visitIdentifier(IdentifierTree tree, Void unused) {
+            recordTypeReference();
+            return super.visitIdentifier(tree, unused);
+        }
+
+        @Override
+        public Void visitMemberSelect(MemberSelectTree tree, Void unused) {
+            recordTypeReference();
+            return super.visitMemberSelect(tree, unused);
+        }
+
+        private void recordTypeReference() {
+            var element = trees.getElement(getCurrentPath());
+            while (element != null && !(element instanceof TypeElement)) {
+                element = element.getEnclosingElement();
+            }
+            if (!(element instanceof TypeElement type)) {
+                return;
+            }
+            String name = elements.getBinaryName(type).toString();
+            if (name.isEmpty()) {
+                return;
+            }
+            String module = moduleName(type);
+            var pkg = elements.getPackageOf(type);
+            typeReferences.putIfAbsent(module + "#" + name,
+                "{\"binaryName\":" + quote(name) + ",\"moduleName\":" + quote(module) +
+                ",\"package\":" + quote(pkg == null ? "" : pkg.getQualifiedName().toString()) + "}");
+        }
+
+        private String sourceModuleName() {
+            for (var declaration : unit.getTypeDecls()) {
+                if (trees.getElement(TreePath.getPath(unit, declaration)) instanceof TypeElement type) {
+                    return moduleName(type);
+                }
+            }
+            return unit.getModule() == null ? "" : unit.getModule().getName().toString();
+        }
+
+        private String moduleName(Element element) {
+            var module = elements.getModuleOf(element);
+            return module == null ? "" : module.getQualifiedName().toString();
+        }
+
         private void record(Tree tree, List<String> output) {
             var positions = trees.getSourcePositions();
             long start = positions.getStartPosition(unit, tree);
@@ -97,7 +175,8 @@ class JavaSourceAnalysis {
             output.add("{" + "\"kind\":" + quote(tree.getKind().name()) +
                 ",\"symbol\":" + quote(symbol(element)) +
                 ",\"type\":" + quote(type == null ? "" : type.toString()) +
-                declarationAttributes(element) +
+                (output == declarations ? declarationAttributes(element) +
+                    ",\"typeDescription\":" + typeRecord(type) : "") +
                 ",\"start\":" + start + ",\"end\":" + end +
                 ",\"line\":" + unit.getLineMap().getLineNumber(start) +
                 ",\"column\":" + unit.getLineMap().getColumnNumber(start) + "}");
@@ -111,15 +190,27 @@ class JavaSourceAnalysis {
             String owner = enclosing instanceof TypeElement type ? elements.getBinaryName(type).toString() : "";
             var modifiers = element.getModifiers().stream().map(modifier -> quote(modifier.name()))
                 .collect(Collectors.joining(","));
-            String result = ",\"name\":" + quote(element.getSimpleName().toString()) +
+            String result = ",\"moduleName\":" + quote(moduleName(element)) +
+                ",\"name\":" + quote(element.getSimpleName().toString()) +
                 ",\"owner\":" + quote(owner) + ",\"modifiers\":[" + modifiers + "]" +
-                ",\"annotationCount\":" + element.getAnnotationMirrors().size();
+                ",\"annotationCount\":" + element.getAnnotationMirrors().size() +
+                ",\"annotations\":[" + element.getAnnotationMirrors().stream()
+                    .map(this::annotationRecord).collect(Collectors.joining(",")) + "]";
+            if (element instanceof Parameterizable parameterizable) {
+                var parameters = parameterizable.getTypeParameters().stream().map(parameter ->
+                    "{\"name\":" + quote(parameter.getSimpleName().toString()) +
+                    ",\"bounds\":" + typeList(parameter.getBounds()) + "}").collect(Collectors.joining(","));
+                result += ",\"typeParameters\":[" + parameters + "]";
+            }
             if (element instanceof ExecutableElement method) {
                 var parameters = method.getParameters().stream().map(parameter ->
                     "{\"name\":" + quote(parameter.getSimpleName().toString()) +
                     ",\"type\":" + quote(parameter.asType().toString()) + "}").collect(Collectors.joining(","));
                 var thrown = method.getThrownTypes().stream().map(type -> quote(type.toString()))
                     .collect(Collectors.joining(","));
+                if (method.getDefaultValue() != null) {
+                    result += ",\"annotationDefault\":" + annotationValue(method.getDefaultValue());
+                }
                 return result + ",\"result\":" + quote(method.getReturnType().toString()) +
                     ",\"parameters\":[" + parameters + "],\"thrown\":[" + thrown + "]" +
                     ",\"hasTypeParams\":" + !method.getTypeParameters().isEmpty();
@@ -138,6 +229,105 @@ class JavaSourceAnalysis {
                 return result + ",\"constant\":" + quote(spelling);
             }
             return result;
+        }
+
+        private String typeRecord(TypeMirror type) {
+            if (type == null) {
+                return "null";
+            }
+            String properties = "\"kind\":" + quote(type.getKind().name());
+            var annotations = type.getAnnotationMirrors().stream()
+                .map(this::annotationRecord).collect(Collectors.joining(","));
+            properties += ",\"annotations\":[" + annotations + "]";
+            if (type instanceof DeclaredType declared && declared.asElement() instanceof TypeElement element) {
+                properties += ",\"name\":" + quote(symbol(element)) +
+                    ",\"moduleName\":" + quote(moduleName(element)) +
+                    ",\"arguments\":" + typeList(declared.getTypeArguments());
+                if (declared.getEnclosingType().getKind() != TypeKind.NONE) {
+                    properties += ",\"enclosing\":" + typeRecord(declared.getEnclosingType());
+                }
+            } else if (type instanceof ArrayType array) {
+                properties += ",\"component\":" + typeRecord(array.getComponentType());
+            } else if (type instanceof TypeVariable variable &&
+                    variable.asElement() instanceof TypeParameterElement parameter) {
+                // Bounds belong to the declaration. Including them here would
+                // recurse for types such as T extends Comparable<T>.
+                properties += ",\"name\":" + quote(parameter.getSimpleName().toString()) +
+                    ",\"owner\":" + quote(symbol(parameter.getGenericElement()));
+            } else if (type instanceof WildcardType wildcard) {
+                properties += ",\"upperBound\":" + typeRecord(wildcard.getExtendsBound()) +
+                    ",\"lowerBound\":" + typeRecord(wildcard.getSuperBound());
+            } else if (type instanceof IntersectionType intersection) {
+                properties += ",\"bounds\":" + typeList(intersection.getBounds());
+            } else if (type instanceof ExecutableType executable) {
+                properties += ",\"parameters\":" + typeList(executable.getParameterTypes()) +
+                    ",\"result\":" + typeRecord(executable.getReturnType()) +
+                    ",\"thrown\":" + typeList(executable.getThrownTypes());
+            }
+            return "{" + properties + "}";
+        }
+
+        private String typeList(List<? extends TypeMirror> types) {
+            return "[" + types.stream().map(this::typeRecord).collect(Collectors.joining(",")) + "]";
+        }
+
+        private String annotationRecord(AnnotationMirror annotation) {
+            var explicit = annotation.getElementValues();
+            var members = elements.getElementValuesWithDefaults(annotation).entrySet().stream()
+                .sorted(Comparator.comparing(entry -> entry.getKey().getSimpleName().toString()))
+                .map(entry -> "{\"name\":" + quote(entry.getKey().getSimpleName().toString()) +
+                    ",\"explicit\":" + explicit.containsKey(entry.getKey()) +
+                    ",\"value\":" + annotationValue(entry.getValue()) + "}")
+                .collect(Collectors.joining(","));
+            var annotationType = annotation.getAnnotationType().asElement();
+            return "{\"type\":" + quote(symbol(annotationType)) +
+                ",\"retention\":" + quote(annotationRetention(annotationType)) +
+                ",\"members\":[" + members + "]}";
+        }
+
+        private String annotationRetention(Element annotationType) {
+            if (annotationType == null) {
+                return "CLASS";
+            }
+            for (var annotation : annotationType.getAnnotationMirrors()) {
+                if (annotation.getAnnotationType().toString().equals("java.lang.annotation.Retention")) {
+                    for (var value : annotation.getElementValues().values()) {
+                        if (value.getValue() instanceof VariableElement retention) {
+                            return retention.getSimpleName().toString();
+                        }
+                    }
+                }
+            }
+            return "CLASS";
+        }
+
+        private String annotationValue(AnnotationValue annotationValue) {
+            var value = annotationValue.getValue();
+            if (value == null) {
+                return scalarValue("UNRESOLVED", "");
+            }
+            if (value instanceof AnnotationMirror nested) {
+                return "{\"kind\":\"ANNOTATION\",\"annotation\":" + annotationRecord(nested) + "}";
+            }
+            if (value instanceof List<?> values) {
+                var entries = values.stream().map(entry -> annotationValue((AnnotationValue) entry))
+                    .collect(Collectors.joining(","));
+                return "{\"kind\":\"ARRAY\",\"elements\":[" + entries + "]}";
+            }
+            if (value instanceof VariableElement member) {
+                return scalarValue("ENUM_CONSTANT", symbol(member));
+            }
+            if (value instanceof TypeMirror type) {
+                return scalarValue("CLASS_LITERAL", type.toString());
+            }
+            if (value instanceof Character character) {
+                return scalarValue("CHAR", Integer.toString(character));
+            }
+            return scalarValue(value.getClass().getSimpleName().toUpperCase(Locale.ROOT), value.toString());
+        }
+
+        private static String scalarValue(String kind, String text) {
+            return "{\"kind\":" + quote(kind) + ",\"text\":" + quote(text) + "}";
         }
 
         private String symbol(Element element) {
@@ -174,9 +364,10 @@ class JavaSourceAnalysis {
             System.exit(2);
         }
         var diagnostics = new DiagnosticCollector<JavaFileObject>();
-        var sources = Arrays.stream(arguments, 4, arguments.length).map(Path::of).toList();
+        var encoding = arguments[4].isEmpty() ? StandardCharsets.UTF_8 : Charset.forName(arguments[4]);
+        var sources = Arrays.stream(arguments, 5, arguments.length).map(Path::of).toList();
         var files = new ArrayList<String>();
-        try (var manager = compiler.getStandardFileManager(diagnostics, Locale.ROOT, StandardCharsets.UTF_8)) {
+        try (var manager = compiler.getStandardFileManager(diagnostics, Locale.ROOT, encoding)) {
             var inputs = manager.getJavaFileObjectsFromPaths(sources);
             var task = (JavacTask) compiler.getTask(null, manager, diagnostics, options, null, inputs);
             var units = task.parse();
@@ -187,6 +378,9 @@ class JavaSourceAnalysis {
                 inventory.scan(unit, null);
                 files.add("{" + "\"path\":" + quote(filePath(unit.getSourceFile())) +
                     ",\"package\":" + quote(unit.getPackageName() == null ? "" : unit.getPackageName().toString()) +
+                    moduleRecord(unit.getModule()) +
+                    ",\"moduleName\":" + quote(inventory.sourceModuleName()) +
+                    ",\"typeReferences\":[" + String.join(",", inventory.typeReferences.values()) + "]" +
                     ",\"declarations\":[" + String.join(",", inventory.declarations) + "]" +
                     ",\"calls\":[" + String.join(",", inventory.calls) + "]}");
             }
@@ -195,6 +389,40 @@ class JavaSourceAnalysis {
             .map(JavaSourceAnalysis::diagnosticRecord).collect(Collectors.joining(","));
         System.out.println("{\"schemaVersion\":1,\"release\":" + release + ",\"preview\":" + preview +
             ",\"files\":[" + String.join(",", files) + "],\"diagnostics\":[" + diagnosticRecords + "]}");
+    }
+
+    private static String moduleRecord(ModuleTree module) {
+        if (module == null) {
+            return "";
+        }
+        var directives = new ArrayList<String>();
+        for (var directive : module.getDirectives()) {
+            String kind = directive.getKind().name();
+            if (directive instanceof RequiresTree requires) {
+                directives.add("{\"kind\":" + quote(kind) +
+                    ",\"name\":" + quote(requires.getModuleName().toString()) +
+                    ",\"static\":" + requires.isStatic() + ",\"transitive\":" + requires.isTransitive() + "}");
+            } else if (directive instanceof ExportsTree exports) {
+                directives.add(moduleDirective(kind, exports.getPackageName(), exports.getModuleNames()));
+            } else if (directive instanceof OpensTree opens) {
+                directives.add(moduleDirective(kind, opens.getPackageName(), opens.getModuleNames()));
+            } else if (directive instanceof UsesTree uses) {
+                directives.add(moduleDirective(kind, uses.getServiceName(), List.of()));
+            } else if (directive instanceof ProvidesTree provides) {
+                directives.add(moduleDirective(kind, provides.getServiceName(), provides.getImplementationNames()));
+            }
+        }
+        return ",\"module\":{\"name\":" + quote(module.getName().toString()) +
+            ",\"open\":" + (module.getModuleType() == ModuleTree.ModuleKind.OPEN) +
+            ",\"directives\":[" + String.join(",", directives) + "]}";
+    }
+
+    private static String moduleDirective(String kind, ExpressionTree name,
+            List<? extends ExpressionTree> targets) {
+        var values = targets == null ? "" : targets.stream().map(target -> quote(target.toString()))
+            .collect(Collectors.joining(","));
+        return "{\"kind\":" + quote(kind) + ",\"name\":" + quote(name.toString()) +
+            ",\"targets\":[" + values + "]}";
     }
 
     private static void addPathOption(List<String> options, String name, String value) {

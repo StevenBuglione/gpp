@@ -196,6 +196,7 @@ func commandHelp(name string) int {
 		fmt.Println("       gpp migrate java --emit-gpp [options] <file.java> ...")
 		fmt.Println("       gpp migrate java --analyze [--java path] --inputs manifest.json")
 		fmt.Println("  --release version    Java source version (default: 17)")
+		fmt.Println("  --encoding name      Java source encoding (default: UTF-8)")
 		fmt.Println("  --class-path paths   Java compiler classpath")
 		fmt.Println("  --module-path paths  Java compiler module path")
 		fmt.Println("  --enable-preview     enable previews matching the JDK and release")

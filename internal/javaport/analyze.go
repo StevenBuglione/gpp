@@ -21,6 +21,7 @@ var analyzerSource []byte
 type Options struct {
 	Java       string
 	Release    int
+	Encoding   string
 	ClassPath  string
 	ModulePath string
 	Preview    bool
@@ -30,6 +31,7 @@ type BuildInputs struct {
 	SchemaVersion int      `json:"schemaVersion"`
 	Release       int      `json:"release"`
 	Preview       bool     `json:"preview"`
+	Encoding      string   `json:"encoding,omitempty"`
 	ClassPath     []string `json:"classPath"`
 	ModulePath    []string `json:"modulePath"`
 	Sources       []string `json:"sources"`
@@ -61,34 +63,68 @@ func ReadBuildInputs(path string) (BuildInputs, error) {
 }
 
 type Report struct {
-	SchemaVersion int          `json:"schemaVersion"`
-	Release       int          `json:"release"`
-	Preview       bool         `json:"preview"`
-	Files         []SourceFile `json:"files"`
-	Diagnostics   []Diagnostic `json:"diagnostics"`
+	SchemaVersion int                 `json:"schemaVersion"`
+	Release       int                 `json:"release"`
+	Preview       bool                `json:"preview"`
+	Files         []SourceFile        `json:"files"`
+	PackageCycles [][]PackageIdentity `json:"packageCycles,omitempty"`
+	Diagnostics   []Diagnostic        `json:"diagnostics"`
 }
 
 type SourceFile struct {
-	Path         string       `json:"path"`
-	Package      string       `json:"package"`
-	Declarations []Occurrence `json:"declarations"`
-	Calls        []Occurrence `json:"calls"`
+	Path           string            `json:"path"`
+	Package        string            `json:"package"`
+	ModuleName     string            `json:"moduleName,omitempty"`
+	TypeReferences []TypeReference   `json:"typeReferences,omitempty"`
+	Declarations   []Occurrence      `json:"declarations"`
+	Calls          []Occurrence      `json:"calls"`
+	Module         *ModuleDescriptor `json:"module,omitempty"`
+}
+
+type PackageIdentity struct {
+	ModuleName string `json:"moduleName,omitempty"`
+	Package    string `json:"package"`
+}
+
+type TypeReference struct {
+	PackageIdentity
+	BinaryName string `json:"binaryName"`
+}
+
+// ModuleDescriptor preserves explicit module-info.java declarations.
+type ModuleDescriptor struct {
+	Name       string            `json:"name"`
+	Open       bool              `json:"open"`
+	Directives []ModuleDirective `json:"directives"`
+}
+
+type ModuleDirective struct {
+	Kind       string   `json:"kind"`
+	Name       string   `json:"name"`
+	Targets    []string `json:"targets,omitempty"`
+	Static     bool     `json:"static,omitempty"`
+	Transitive bool     `json:"transitive,omitempty"`
 }
 
 type Occurrence struct {
-	Kind            string      `json:"kind"`
-	Symbol          string      `json:"symbol"`
-	Type            string      `json:"type"`
-	Owner           string      `json:"owner,omitempty"`
-	Name            string      `json:"name,omitempty"`
-	Modifiers       []string    `json:"modifiers,omitempty"`
-	Parameters      []Parameter `json:"parameters,omitempty"`
-	Result          string      `json:"result,omitempty"`
-	Thrown          []string    `json:"thrown,omitempty"`
-	Supertypes      []string    `json:"supertypes,omitempty"`
-	HasTypeParams   bool        `json:"hasTypeParams,omitempty"`
-	Constant        *string     `json:"constant,omitempty"`
-	AnnotationCount int         `json:"annotationCount,omitempty"`
+	Kind              string           `json:"kind"`
+	Symbol            string           `json:"symbol"`
+	Type              string           `json:"type"`
+	Owner             string           `json:"owner,omitempty"`
+	Name              string           `json:"name,omitempty"`
+	Modifiers         []string         `json:"modifiers,omitempty"`
+	Parameters        []Parameter      `json:"parameters,omitempty"`
+	Result            string           `json:"result,omitempty"`
+	Thrown            []string         `json:"thrown,omitempty"`
+	Supertypes        []string         `json:"supertypes,omitempty"`
+	HasTypeParams     bool             `json:"hasTypeParams,omitempty"`
+	Constant          *string          `json:"constant,omitempty"`
+	AnnotationCount   int              `json:"annotationCount,omitempty"`
+	Annotations       []Annotation     `json:"annotations,omitempty"`
+	AnnotationDefault *AnnotationValue `json:"annotationDefault,omitempty"`
+	ModuleName        string           `json:"moduleName,omitempty"`
+	TypeDescription   *TypeDescription `json:"typeDescription,omitempty"`
+	TypeParameters    []TypeParameter  `json:"typeParameters,omitempty"`
 	// Start and End are Java compiler offsets in UTF-16 code units.
 	Start  int64 `json:"start"`
 	End    int64 `json:"end"`
@@ -96,9 +132,51 @@ type Occurrence struct {
 	Column int64 `json:"column"`
 }
 
+// TypeDescription preserves the generic structure that a JVM descriptor erases.
+type TypeDescription struct {
+	Kind        string            `json:"kind"`
+	Name        string            `json:"name,omitempty"`
+	ModuleName  string            `json:"moduleName,omitempty"`
+	Owner       string            `json:"owner,omitempty"`
+	Arguments   []TypeDescription `json:"arguments,omitempty"`
+	Annotations []Annotation      `json:"annotations,omitempty"`
+	Enclosing   *TypeDescription  `json:"enclosing,omitempty"`
+	Component   *TypeDescription  `json:"component,omitempty"`
+	UpperBound  *TypeDescription  `json:"upperBound,omitempty"`
+	LowerBound  *TypeDescription  `json:"lowerBound,omitempty"`
+	Bounds      []TypeDescription `json:"bounds,omitempty"`
+	Parameters  []TypeDescription `json:"parameters,omitempty"`
+	Result      *TypeDescription  `json:"result,omitempty"`
+	Thrown      []TypeDescription `json:"thrown,omitempty"`
+}
+
+type TypeParameter struct {
+	Name   string            `json:"name"`
+	Bounds []TypeDescription `json:"bounds"`
+}
+
 type Parameter struct {
 	Name string `json:"name"`
 	Type string `json:"type"`
+}
+
+type Annotation struct {
+	Type      string           `json:"type"`
+	Retention string           `json:"retention"`
+	Members   []AnnotationPair `json:"members"`
+}
+
+type AnnotationPair struct {
+	Name     string          `json:"name"`
+	Explicit bool            `json:"explicit"`
+	Value    AnnotationValue `json:"value"`
+}
+
+type AnnotationValue struct {
+	Kind       string            `json:"kind"`
+	Text       string            `json:"text,omitempty"`
+	Annotation *Annotation       `json:"annotation,omitempty"`
+	Elements   []AnnotationValue `json:"elements,omitempty"`
 }
 
 type Diagnostic struct {
@@ -139,7 +217,7 @@ func Analyze(ctx context.Context, inputs []string, options Options) (Report, err
 	// Framing with NUL keeps file paths with whitespace intact and permits
 	// projects whose source paths exceed the OS command-line limit.
 	arguments := append([]string{
-		strconv.Itoa(options.Release), strconv.FormatBool(options.Preview), options.ClassPath, options.ModulePath,
+		strconv.Itoa(options.Release), strconv.FormatBool(options.Preview), options.ClassPath, options.ModulePath, options.Encoding,
 	}, sources...)
 	var stderr bytes.Buffer
 	command := exec.CommandContext(ctx, launcher, analyzer)
@@ -159,6 +237,7 @@ func Analyze(ctx context.Context, inputs []string, options Options) (Report, err
 	if report.SchemaVersion != 1 {
 		return Report{}, fmt.Errorf("unsupported Java analysis schema %d", report.SchemaVersion)
 	}
+	report.PackageCycles = packageCycles(report.Files)
 	return report, nil
 }
 

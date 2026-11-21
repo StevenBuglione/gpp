@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ "$#" != 2 ]]; then
-    printf 'Usage: %s framework|boot <checkout-directory>\n' "$0" >&2
+if [[ "$#" -lt 2 || "$#" -gt 3 ]]; then
+    printf 'Usage: %s framework|boot <checkout-directory> [--inventory|--all-java|--boot-probe]\n' "$0" >&2
     exit 2
 fi
 
@@ -33,6 +33,23 @@ case "$1" in
         printf 'Unknown Spring reference project: %s\n' "$1" >&2
         exit 2
         ;;
+esac
+
+case "${3:-}" in
+    "") ;;
+    --inventory) tasks=(:gppReferenceProjects) ;;
+    --all-java) tasks=(--continue gppReferenceInputs) ;;
+    --boot-probe)
+        if [[ "$1" != boot ]]; then
+            printf '%s\n' '--boot-probe requires the boot project.' >&2
+            exit 2
+        fi
+        tasks=(
+            "-Dgpp.springBootProbe=$repo_root/tests/testdata/spring-boot-reference/SpringBootProbe.java"
+            :module:spring-boot-transaction:gppBootProbe
+        )
+        ;;
+    *) printf 'Unknown Spring reference mode: %s\n' "$3" >&2; exit 2 ;;
 esac
 
 checkout="$2"

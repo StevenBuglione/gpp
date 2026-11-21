@@ -10,9 +10,16 @@ gradle.beforeProject { project ->
             group = "verification"
             description = "Capture inputs for GPP's Spring source analysis."
             dependsOn(compilers)
+            dependsOn(project.tasks.matching { it.name ==~ /(?:classes|java[0-9]+Classes)/ })
             doLast {
                 compilers.sort { it.name }.each { task ->
                     def compilerOptions = task.options
+                    def sourceSet = project.extensions.getByName("sourceSets").find {
+                        it.compileJavaTaskName == task.name
+                    }
+                    def additionalClasses = sourceSet?.output?.classesDirs?.files?.findAll {
+                        it.isDirectory() && (!task.enabled || it != task.destinationDirectory.get().asFile)
+                    } ?: []
                     def sourceFiles = task.source.files.findAll { it.isFile() && it.name.endsWith(".java") }
                     def generated = compilerOptions.generatedSourceOutputDirectory.orNull?.asFile
                     if (generated?.isDirectory()) {
@@ -26,13 +33,64 @@ gradle.beforeProject { project ->
                         project: project.path,
                         release: release,
                         preview: "--enable-preview" in compilerOptions.compilerArgs,
-                        classPath: task.classpath.files.collect { it.absolutePath },
+                        classPath: (task.classpath.files + additionalClasses).collect { it.absolutePath },
                         sources: sourceFiles.collect { it.absolutePath }.sort(),
                         compilerArgs: compilerOptions.compilerArgs,
                         encoding: compilerOptions.encoding
                     ])) + "\n", "UTF-8")
                     logger.lifecycle("GPP Java inputs: ${output}")
                 }
+            }
+        }
+    }
+}
+
+gradle.rootProject { root ->
+    root.tasks.register("gppReferenceProjects") {
+        group = "verification"
+        description = "Capture the complete pinned Spring project inventory."
+        doLast {
+            def projects = root.allprojects.toList().sort { it.path }.collect { project ->
+                def sources = project.extensions.findByName("sourceSets")?.collect { sourceSet ->
+                    [
+                        name: sourceSet.name,
+                        javaPaths: sourceSet.java.srcDirs.collect { root.relativePath(it) }.sort(),
+                        sourcePaths: sourceSet.allSource.srcDirs.collect { root.relativePath(it) }.sort(),
+                        compileTask: sourceSet.compileJavaTaskName
+                    ]
+                } ?: []
+                [
+                    path: project.path,
+                    directory: root.relativePath(project.projectDir),
+                    version: project.version.toString(),
+                    sourceSets: sources.sort { it.name }
+                ]
+            }
+            def included = gradle.includedBuilds.collect { build ->
+                [name: build.name, directory: root.relativePath(build.projectDir)]
+            }.sort { it.name }
+            def output = root.layout.buildDirectory.file("gpp-reference/projects.json").get().asFile
+            output.parentFile.mkdirs()
+            output.setText(JsonOutput.prettyPrint(JsonOutput.toJson([
+                schemaVersion: 1,
+                rootProject: root.name,
+                projects: projects,
+                includedBuilds: included
+            ])) + "\n", "UTF-8")
+            logger.lifecycle("GPP Spring project inventory: ${output}")
+        }
+    }
+}
+
+gradle.beforeProject { project ->
+    def probe = project.providers.systemProperty("gpp.springBootProbe")
+    if (project.path == ":module:spring-boot-transaction" && probe.present) {
+        project.plugins.withId("java") {
+            project.tasks.register("gppBootProbe", JavaExec) {
+                group = "verification"
+                description = "Run the upstream Spring Boot behavior reference."
+                classpath = project.extensions.getByName("sourceSets").main.runtimeClasspath
+                mainClass = probe.get()
             }
         }
     }

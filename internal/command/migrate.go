@@ -27,6 +27,7 @@ func runMigrate(args []string) int {
 	flags.SetOutput(os.Stderr)
 	flags.Usage = func() { commandHelp("migrate") }
 	flags.IntVar(&options.Release, "release", 17, "Java source release")
+	flags.StringVar(&options.Encoding, "encoding", "", "Java source encoding (default: UTF-8)")
 	flags.BoolVar(&options.Preview, "enable-preview", false, "enable previews for the selected release")
 	flags.StringVar(&options.ClassPath, "class-path", "", "Java compiler classpath")
 	flags.StringVar(&options.ModulePath, "module-path", "", "Java compiler module path")
@@ -48,12 +49,12 @@ func runMigrate(args []string) int {
 	if *manifest != "" {
 		var inputOverrides []string
 		flags.Visit(func(option *flag.Flag) {
-			if slices.Contains([]string{"release", "enable-preview", "class-path", "module-path"}, option.Name) {
+			if slices.Contains([]string{"release", "encoding", "enable-preview", "class-path", "module-path"}, option.Name) {
 				inputOverrides = append(inputOverrides, "--"+option.Name)
 			}
 		})
 		if len(sources) != 0 || len(inputOverrides) != 0 {
-			fatalf("--inputs supplies all Java sources, release, preview setting, and paths")
+			fatalf("--inputs supplies all Java sources, compiler paths, release, preview setting, and encoding")
 			return 2
 		}
 		inputs, err := javaport.ReadBuildInputs(*manifest)
@@ -61,6 +62,7 @@ func runMigrate(args []string) int {
 			return reportError(err)
 		}
 		options.Release = inputs.Release
+		options.Encoding = inputs.Encoding
 		options.Preview = inputs.Preview
 		options.ClassPath = strings.Join(inputs.ClassPath, string(filepath.ListSeparator))
 		options.ModulePath = strings.Join(inputs.ModulePath, string(filepath.ListSeparator))
