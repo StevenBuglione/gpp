@@ -11,6 +11,7 @@ const (
 	javaIllegalArgumentException = "java.lang.IllegalArgumentException"
 	javaNullPointerException     = "java.lang.NullPointerException"
 	javaClassCastException       = "java.lang.ClassCastException"
+	javaArithmeticException      = "java.lang.ArithmeticException"
 	javaAutoCloseable            = "java.lang.AutoCloseable"
 	javaThrowableArray           = "java.lang.Throwable[]"
 )
@@ -22,6 +23,7 @@ var javaCatchTypes = map[string]string{
 	javaIllegalArgumentException:                "*javart.IllegalArgumentException",
 	javaNullPointerException:                    "*javart.NullPointerException",
 	javaClassCastException:                      "*javart.ClassCastException",
+	javaArithmeticException:                     "*javart.ArithmeticException",
 	"java.lang.StringIndexOutOfBoundsException": "*javart.StringIndexOutOfBoundsException",
 	javaIOException:                             "*javart.IOException",
 }
@@ -176,6 +178,8 @@ func (ctx javaObjectContext) newThrowable(expression *JavaExpression) (string, e
 		constructor = "NewIOException"
 	case javaIllegalArgumentException + "#<init>()", javaIllegalArgumentException + "#<init>(java.lang.String)":
 		constructor = "NewIllegalArgumentException"
+	case javaArithmeticException + "#<init>()", javaArithmeticException + "#<init>(java.lang.String)":
+		constructor = "NewArithmeticException"
 	case javaNullPointerException + "#<init>()":
 		ctx.program.runtime = true
 		return "&javart.NullPointerException{}", nil

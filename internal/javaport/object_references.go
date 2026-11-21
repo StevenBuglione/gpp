@@ -192,7 +192,7 @@ func (ctx javaObjectContext) instanceOf(expression *JavaExpression) (string, err
 
 func (ctx javaObjectContext) referenceComparison(expression *JavaExpression) (string, error) {
 	if primitiveEquality(expression) {
-		return ctx.program.primitiveLowering.primitiveComparison(expression, ctx.expression)
+		return ctx.program.primitiveLowering.binary(expression, ctx.expression)
 	}
 	return referenceComparison(expression, ctx.program.canConvertReference, ctx.converted)
 }
@@ -225,24 +225,4 @@ func referenceComparison(expression *JavaExpression, assignable func(string, str
 		return "", err
 	}
 	return comparisonCode(left, right, equal), nil
-}
-
-func (ctx javaObjectContext) integerArithmetic(expression *JavaExpression) (string, error) {
-	if expression.Type != "int" && expression.Type != "long" {
-		return "", fmt.Errorf("unsupported Java operator %s for %s", expression.Kind, expression.Type)
-	}
-	left, err := ctx.converted(expression.Left, expression.Type)
-	if err != nil {
-		return "", err
-	}
-	right, err := ctx.converted(expression.Right, expression.Type)
-	if err != nil {
-		return "", err
-	}
-	operator := "+"
-	if expression.Kind == "MULTIPLY" {
-		operator = "*"
-	}
-	return fmt.Sprintf("func() %s {\n\tjavaLeft := %s\n\tjavaRight := %s\n\treturn javaLeft %s javaRight\n}()",
-		primitiveTypes[expression.Type], left, right, operator), nil
 }

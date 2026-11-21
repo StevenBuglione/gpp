@@ -77,12 +77,12 @@ func emitPrimitiveUtilityClasses(report Report) (string, error) {
 }
 
 type primitiveLowering struct {
-	javaRuntime  bool
-	floatingBits bool
+	javaRuntime bool
+	mathImport  bool
 }
 
 func (lowering primitiveLowering) emitNativeImports(out *strings.Builder) {
-	if lowering.floatingBits {
+	if lowering.mathImport {
 		out.WriteString("\nimport javamath \"math\"\n")
 	}
 }
@@ -130,7 +130,7 @@ func (lowering *primitiveLowering) expression(expression *JavaExpression, argume
 		return lowering.shift(expression, evaluate)
 	case "EQUAL_TO", "NOT_EQUAL_TO":
 		if primitiveEquality(expression) {
-			return lowering.primitiveComparison(expression, evaluate)
+			return lowering.binary(expression, evaluate)
 		}
 		return referenceComparison(expression, canWidenBoxingReference, func(operand *JavaExpression, target string) (string, error) {
 			value, err := evaluate(operand)
@@ -168,6 +168,10 @@ func (lowering *primitiveLowering) expression(expression *JavaExpression, argume
 		return "nil", nil
 	case "BOOLEAN_LITERAL", "CHAR_LITERAL", "INT_LITERAL", "LONG_LITERAL", "FLOAT_LITERAL", "DOUBLE_LITERAL":
 		return lowering.literal(expression.Type, expression.Literal)
+	default:
+		if _, binary := javaPrimitiveOperators[expression.Kind]; binary {
+			return lowering.binary(expression, evaluate)
+		}
 	}
 	return "", fmt.Errorf("unsupported expression %s at %d:%d", expression.Kind, expression.Line, expression.Column)
 }
@@ -178,7 +182,7 @@ func (lowering *primitiveLowering) literal(javaType, value string) (string, erro
 		number, err := strconv.ParseFloat(value, width)
 		if err == nil && requiresFloatingBits(number) {
 			// Go constants cannot represent non-finite IEEE values or negative zero.
-			lowering.floatingBits = true
+			lowering.mathImport = true
 			if javaType == "float" {
 				bits := math.Float32bits(float32(number))
 				if math.IsNaN(number) {
@@ -327,19 +331,19 @@ func (lowering *primitiveLowering) shift(expression *JavaExpression, evaluate fu
 	if distanceType == "" {
 		return "", fmt.Errorf("unsupported shift distance type %s", expression.Right.Type)
 	}
-	distance := fmt.Sprintf("(uint64(distance) & %d)", mask)
+	distance := fmt.Sprintf("(uint64(javaDistance) & %d)", mask)
 	goType := primitiveTypes[expression.Type]
 	var shifted string
 	switch expression.Kind {
 	case "LEFT_SHIFT":
-		shifted = "operand << " + distance
+		shifted = "javaOperand << " + distance
 	case "UNSIGNED_RIGHT_SHIFT":
-		shifted = goType + "(" + unsigned + "(operand) >> " + distance + ")"
+		shifted = goType + "(" + unsigned + "(javaOperand) >> " + distance + ")"
 	default:
-		shifted = "operand >> " + distance
+		shifted = "javaOperand >> " + distance
 	}
-	return fmt.Sprintf("func(operand %s, distance %s) %s { return %s }(%s, %s)",
-		goType, distanceType, goType, shifted, left, right), nil
+	return fmt.Sprintf("func() %s {\n\tjavaOperand := %s\n\tjavaDistance := %s\n\treturn %s\n}()",
+		goType, left, right, shifted), nil
 }
 
 func (lowering *primitiveLowering) convert(value, from, to string) (string, error) {

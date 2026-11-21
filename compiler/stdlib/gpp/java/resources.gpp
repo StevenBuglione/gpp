@@ -98,6 +98,8 @@ func throwableSuppression(value Throwable, create bool) *suppressedErrors {
         return &failure.suppressed
     case *ClassCastException:
         return &failure.suppressed
+    case *ArithmeticException:
+        return &failure.suppressed
     case *IllegalArgumentException:
         return suppressionsFor(failure, create)
     case *StringIndexOutOfBoundsException:

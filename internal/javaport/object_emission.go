@@ -370,8 +370,6 @@ func (ctx javaObjectContext) expression(expression *JavaExpression) (string, err
 		return "nil", nil
 	case "EQUAL_TO", "NOT_EQUAL_TO":
 		return ctx.referenceComparison(expression)
-	case "PLUS", "MULTIPLY":
-		return ctx.integerArithmetic(expression)
 	case "ARRAY_LENGTH":
 		if expression.Target == nil || expression.Target.Type != javaThrowableArray {
 			return "", fmt.Errorf("unsupported Java array length expression")
@@ -393,6 +391,9 @@ func (ctx javaObjectContext) expression(expression *JavaExpression) (string, err
 	case "BOOLEAN_LITERAL", "CHAR_LITERAL", "INT_LITERAL", "LONG_LITERAL", "FLOAT_LITERAL", "DOUBLE_LITERAL":
 		return ctx.program.primitiveLowering.literal(expression.Type, expression.Literal)
 	default:
+		if _, binary := javaPrimitiveOperators[expression.Kind]; binary {
+			return ctx.program.primitiveLowering.binary(expression, ctx.expression)
+		}
 		return ctx.program.primitiveLowering.expression(expression, ctx.arguments)
 	}
 }
@@ -429,7 +430,8 @@ func (ctx javaObjectContext) invoke(expression *JavaExpression) (string, error) 
 	if expression.Target != nil && expression.Target.Type == javaStringType {
 		return ctx.invokeString(expression)
 	}
-	if expression.Symbol == "java.lang.Throwable#getMessage()" && expression.Target != nil && expression.Target.Type == javaIOException {
+	if expression.Symbol == "java.lang.Throwable#getMessage()" && expression.Target != nil &&
+		(expression.Target.Type == javaIOException || expression.Target.Type == javaArithmeticException) {
 		value, err := ctx.expression(expression.Target)
 		ctx.program.runtime = true
 		return "javart.RequireNonNull(" + value + ").GetMessage()", err

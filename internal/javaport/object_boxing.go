@@ -215,35 +215,6 @@ func primitiveEquality(expression *JavaExpression) bool {
 	return primitiveTypes[expression.Left.Type] != "" || primitiveTypes[expression.Right.Type] != ""
 }
 
-func (lowering *primitiveLowering) primitiveComparison(expression *JavaExpression, evaluate func(*JavaExpression) (string, error)) (string, error) {
-	left, err := evaluate(expression.Left)
-	if err != nil {
-		return "", err
-	}
-	right, err := evaluate(expression.Right)
-	if err != nil {
-		return "", err
-	}
-	left, leftType := lowering.unbox(left, expression.Left.Type)
-	right, rightType := lowering.unbox(right, expression.Right.Type)
-	promoted := "int"
-	for _, candidate := range []string{"boolean", "double", "float", "long"} {
-		if leftType == candidate || rightType == candidate {
-			promoted = candidate
-			break
-		}
-	}
-	left, err = lowering.convert(left, leftType, promoted)
-	if err != nil {
-		return "", err
-	}
-	right, err = lowering.convert(right, rightType, promoted)
-	if err != nil {
-		return "", err
-	}
-	return comparisonCode(left, right, expression.Kind == "EQUAL_TO"), nil
-}
-
 func comparisonCode(left, right string, equal bool) string {
 	operator := " == "
 	if !equal {

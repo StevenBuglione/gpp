@@ -1,0 +1,40 @@
+package gpp.java
+
+type javaInteger interface {
+    int32 | int64
+}
+
+type ArithmeticException struct {
+    message *String
+    suppressed suppressedErrors
+}
+
+func NewArithmeticException(message *String) *ArithmeticException {
+    return &ArithmeticException{message: message}
+}
+
+func (exception *ArithmeticException) Error() string {
+    if message, available := exception.message.ToGo(); available {
+        return message
+    }
+    return exception.JavaClassName()
+}
+
+func (exception *ArithmeticException) GetMessage() *String { return exception.message }
+func (*ArithmeticException) JavaClassName() string { return "java.lang.ArithmeticException" }
+func (*ArithmeticException) JavaRuntimeException() {}
+func (*ArithmeticException) JavaException() {}
+
+func DivideInteger[T javaInteger](dividend, divisor T) T {
+    if divisor == 0 {
+        Raise(NewArithmeticException(StringFromGo("/ by zero")))
+    }
+    return dividend / divisor
+}
+
+func RemainderInteger[T javaInteger](dividend, divisor T) T {
+    if divisor == 0 {
+        Raise(NewArithmeticException(StringFromGo("/ by zero")))
+    }
+    return dividend % divisor
+}
