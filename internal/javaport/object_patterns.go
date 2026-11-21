@@ -42,8 +42,8 @@ func (ctx javaObjectContext) patternSlot(id int64, javaType string) (string, err
 		return "", fmt.Errorf("missing attributed Java pattern binding")
 	}
 	goType := ctx.program.objectGoType(javaType)
-	if goType == "" || !ctx.program.referenceType(javaType) {
-		return "", fmt.Errorf("unsupported Java reference pattern type %s", javaType)
+	if goType == "" {
+		return "", fmt.Errorf("unsupported Java pattern variable type %s", javaType)
 	}
 	ctx.patterns[id] = goType
 	return javaPatternName(id), nil

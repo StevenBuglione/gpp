@@ -381,6 +381,8 @@ class JavaSourceAnalysis {
         // launcher. Look up the newer public interfaces only when present.
         private static final Method CASE_PATTERN = treeAccessor("PatternCaseLabelTree", "getPattern");
         private static final Method CASE_GUARD = treeAccessor("CaseTree", "getGuard");
+        private static final Method RECORD_TYPE = treeAccessor("DeconstructionPatternTree", "getDeconstructor");
+        private static final Method RECORD_COMPONENTS = treeAccessor("DeconstructionPatternTree", "getNestedPatterns");
 
         private static Method treeAccessor(String type, String method) {
             try {
@@ -437,6 +439,10 @@ class JavaSourceAnalysis {
         }
 
         private String switchPattern(TreePath path) {
+            return switchPattern(path, null);
+        }
+
+        private String switchPattern(TreePath path, TypeMirror componentType) {
             Tree node = path.getLeaf();
             String record = "{\"kind\":" + quote(node.getKind().name());
             if (node instanceof BindingPatternTree binding) {
@@ -444,8 +450,28 @@ class JavaSourceAnalysis {
                 var declaration = trees.getElement(new TreePath(path, variable));
                 long id = variable.getName().length() == 0 || variable.getName().contentEquals("_")
                     ? 0 : bindingId(declaration);
-                record += ",\"type\":" + quote(expressionType(declaration == null ? null : declaration.asType())) +
-                    ",\"bindingId\":" + id;
+                TypeMirror type = declaration == null ? null : declaration.asType();
+                boolean nullable = componentType != null && type != null && !componentType.getKind().isPrimitive() &&
+                    !type.getKind().isPrimitive() && types.isSubtype(types.erasure(componentType), types.erasure(type));
+                record += ",\"type\":" + quote(expressionType(type)) +
+                    ",\"bindingId\":" + id + ",\"nullable\":" + nullable;
+            } else if (node.getKind().name().equals("DECONSTRUCTION_PATTERN")) {
+                var deconstructor = (Tree) readTreeAccessor(RECORD_TYPE, node);
+                var recordType = trees.getTypeMirror(new TreePath(path, deconstructor));
+                record += ",\"type\":" + quote(expressionType(recordType));
+                var nested = (List<?>) readTreeAccessor(RECORD_COMPONENTS, node);
+                if (recordType instanceof DeclaredType declared && declared.asElement() instanceof TypeElement element) {
+                    var components = element.getRecordComponents();
+                    var items = new ArrayList<String>();
+                    for (int index = 0; index < nested.size(); index++) {
+                        var child = (Tree) nested.get(index);
+                        TypeMirror memberType = index < components.size()
+                            ? ((ExecutableType) types.asMemberOf(declared, components.get(index).getAccessor())).getReturnType()
+                            : null;
+                        items.add(switchPattern(new TreePath(path, child), memberType));
+                    }
+                    record += ",\"components\":[" + String.join(",", items) + "]";
+                }
             }
             return record + "}";
         }
@@ -625,6 +651,11 @@ class JavaSourceAnalysis {
                 if (variable.getName().length() == 0 || variable.getName().contentEquals("_")) {
                     kind = "INSTANCE_OF";
                 }
+            } else if (tree instanceof InstanceOfTree test && test.getPattern() != null &&
+                    test.getPattern().getKind().name().equals("DECONSTRUCTION_PATTERN")) {
+                kind = "INSTANCE_OF_RECORD_PATTERN";
+                attributes += ",\"operand\":" + executableExpression(new TreePath(path, test.getExpression())) +
+                    ",\"recordPattern\":" + switchPattern(new TreePath(path, test.getPattern()));
             } else if (tree instanceof InstanceOfTree test && test.getPattern() == null) {
                 var testedType = trees.getTypeMirror(new TreePath(path, test.getType()));
                 attributes += ",\"operand\":" + executableExpression(new TreePath(path, test.getExpression())) +

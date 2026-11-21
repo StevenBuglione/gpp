@@ -491,6 +491,8 @@ func (ctx javaObjectContext) expression(expression *JavaExpression) (string, err
 		return ctx.instanceOf(expression)
 	case "INSTANCE_OF_BINDING":
 		return ctx.instanceOfBinding(expression)
+	case "INSTANCE_OF_RECORD_PATTERN":
+		return ctx.instanceOfRecordPattern(expression)
 	case "SWITCH_EXPRESSION":
 		return ctx.switchExpression(expression)
 	case "ASSIGNMENT":
@@ -566,7 +568,7 @@ func (ctx javaObjectContext) invoke(expression *JavaExpression) (string, error) 
 				ctx.program.runtime = true
 				return "javart.ClassInitializationCause(" + value + ")", err
 			}
-			if expression.Target.Type == javaAssertionError {
+			if expression.Target.Type == javaAssertionError || expression.Target.Type == javaMatchException {
 				value, err := ctx.expression(expression.Target)
 				ctx.program.runtime = true
 				return "javart.RequireNonNull(" + value + ").GetCause()", err

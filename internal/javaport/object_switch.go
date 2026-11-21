@@ -93,6 +93,9 @@ func (ctx javaObjectContext) emitJavaSwitchMatch(out *strings.Builder, selector 
 	if selector == nil {
 		return fmt.Errorf("missing attributed Java switch selector")
 	}
+	if err := ctx.validateRecordPatternArms(cases); err != nil {
+		return err
+	}
 	selectorType := selector.Type
 	goType := ctx.program.objectGoType(selectorType)
 	if goType == "" {
@@ -188,10 +191,16 @@ func (ctx javaObjectContext) emitJavaSwitchMatch(out *strings.Builder, selector 
 func (ctx javaObjectContext) switchPatternTest(patterns []JavaSwitchPattern, guard *JavaExpression) (string, error) {
 	tests := make([]string, 0, len(patterns))
 	for _, pattern := range patterns {
-		if pattern.Kind != "BINDING_PATTERN" {
+		var test string
+		var err error
+		switch pattern.Kind {
+		case "BINDING_PATTERN":
+			test, err = ctx.typePatternTest("javaSelector", pattern.Type, pattern.BindingID)
+		case "DECONSTRUCTION_PATTERN":
+			test, err = ctx.recordPatternTest("javaSelector", pattern)
+		default:
 			return "", fmt.Errorf("unsupported Java switch pattern label %s", pattern.Kind)
 		}
-		test, err := ctx.typePatternTest("javaSelector", pattern.Type, pattern.BindingID)
 		if err != nil {
 			return "", err
 		}

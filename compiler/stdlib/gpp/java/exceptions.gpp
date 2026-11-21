@@ -80,16 +80,51 @@ func (*NullPointerException) JavaException() {}
 
 // MatchException is thrown when an exhaustive Java switch has no matching arm.
 type MatchException struct {
+    cause Throwable
     suppressed suppressedErrors
 }
 
-func (*MatchException) Error() string { return "java.lang.MatchException" }
+func (failure *MatchException) Error() string {
+    if text, ok := failure.GetMessage().ToGo(); ok {
+        return text
+    }
+    return failure.JavaClassName()
+}
 
 func (*MatchException) JavaClassName() string { return "java.lang.MatchException" }
 
 func (*MatchException) JavaRuntimeException() {}
 
 func (*MatchException) JavaException() {}
+
+func (failure *MatchException) GetCause() Throwable { return failure.cause }
+
+func (failure *MatchException) GetMessage() *String {
+    if failure.cause == nil {
+        return nil
+    }
+    name := failure.cause.JavaClassName()
+    if message := ThrowableMessage(failure.cause); message != nil {
+        return ConcatStringValue(StringFromGo(name + ": "), message)
+    }
+    return StringFromGo(name)
+}
+
+// DeconstructRecordComponent translates Java exceptions thrown by accessors
+// into MatchException. A Go panic retains its original value.
+func DeconstructRecordComponent[T any](accessor func() T) T {
+    defer func() {
+        if pending := recover(); pending != nil {
+            if failure, raised := UnwrapRaised(pending); raised {
+                if cause, ok := failure.(Throwable); ok {
+                    Throw(&MatchException{cause: cause})
+                }
+            }
+            panic(pending)
+        }
+    }()
+    return accessor()
+}
 
 type StringIndexOutOfBoundsException struct {
     Index int32
