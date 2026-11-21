@@ -33,7 +33,7 @@ type CompileOptions struct {
 
 const generatedFilesManifestName = ".gpp-generated-files.json"
 const generatedGoVersion = "1.27"
-const generatedCodeSchema = 5
+const generatedCodeSchema = 6
 
 type generatedFilesManifest struct {
 	Files    []string                          `json:"files"`
@@ -247,7 +247,12 @@ func CompileProgramWithOptions(program *Program, outputDir string, options Compi
 		}
 	}
 	usesIntrospection := programUsesIntrospection(program)
-	packageFingerprints := generatedPackageFingerprints(program, model, options, atExit, usesIntrospection)
+	hasStaticInitialization := options.ModulePath != "" && programDeclaresStaticInitialization(emissionFiles)
+	exceptionRuntime := javaExceptionRuntimeImport(options, model)
+	if hasStaticInitialization && exceptionRuntime == "" {
+		exceptionRuntime = options.ModulePath + "/" + classInitializationRuntimePath
+	}
+	packageFingerprints := generatedPackageFingerprints(program, model, options, atExit, usesIntrospection, exceptionRuntime)
 	packageOutputs := make(map[string]generatedPackageOutput, len(packageFingerprints))
 	reusePackage := make(map[string]bool, len(packageFingerprints))
 	for packageName, fingerprint := range packageFingerprints {
@@ -262,6 +267,16 @@ func CompileProgramWithOptions(program *Program, outputDir string, options Compi
 			return err
 		}
 		if err := trackGeneratedFile(filepath.Join(outputDir, "gpp", "runtime", "runtime.go")); err != nil {
+			return err
+		}
+	}
+
+	if hasStaticInitialization {
+		runtimePath := filepath.Join(outputDir, filepath.FromSlash(classInitializationRuntimePath), "runtime.go")
+		if err := emitClassInitializationRuntime(runtimePath); err != nil {
+			return err
+		}
+		if err := trackGeneratedFile(runtimePath); err != nil {
 			return err
 		}
 	}
@@ -336,6 +351,7 @@ func CompileProgramWithOptions(program *Program, outputDir string, options Compi
 					functionSignatures,
 					usesIntrospection,
 					atExit,
+					exceptionRuntime,
 					preludeExtensionsNeeded[packageName],
 					fileEmbeds,
 					fileOutputPaths,
@@ -486,12 +502,13 @@ func generatedPackageDirectory(outputDir, packageName string) string {
 	return directory
 }
 
-func emitPackageFiles(files []*File, outputDir string, options CompileOptions, model *SemanticModel, functionSignatures map[string]map[string][]callableSignature, usesIntrospection, atExit bool, preludeExtensions map[string]bool, embeds map[*File][]compiledEmbed, outputPaths map[*File]string, fingerprint string) (generatedPackageOutput, error) {
+func emitPackageFiles(files []*File, outputDir string, options CompileOptions, model *SemanticModel, functionSignatures map[string]map[string][]callableSignature, usesIntrospection, atExit bool, exceptionRuntime string, preludeExtensions map[string]bool, embeds map[*File][]compiledEmbed, outputPaths map[*File]string, fingerprint string) (generatedPackageOutput, error) {
 	packageName := files[0].Package
 	records := newRecordContext()
 	introspection := newIntrospectionContext(model.Packages[packageName].Classes)
 	introspection.Enabled = usesIntrospection
-	exceptions := &exceptionContext{RuntimeImport: javaExceptionRuntimeImport(options, model)}
+	exceptions := &exceptionContext{RuntimeImport: exceptionRuntime}
+	staticInitialization := &staticInitializationContext{}
 	ternary := &ternaryContext{}
 	preludeEmitted := false
 	output := generatedPackageOutput{Fingerprint: fingerprint, Files: make(map[string]string, len(files))}
@@ -510,6 +527,7 @@ func emitPackageFiles(files []*File, outputDir string, options CompileOptions, m
 		context.Records = records
 		context.Introspection = introspection
 		context.Exceptions = exceptions
+		context.StaticInitialization = staticInitialization
 		context.Ternary = ternary
 		context.Annotations = model.Packages[packageName].Annotations
 		context.Package = packageName
@@ -575,8 +593,7 @@ func emitPackageFiles(files []*File, outputDir string, options CompileOptions, m
 	return output, nil
 }
 
-func generatedPackageFingerprints(program *Program, model *SemanticModel, options CompileOptions, atExit, usesIntrospection bool) map[string]string {
-	exceptionRuntime := javaExceptionRuntimeImport(options, model)
+func generatedPackageFingerprints(program *Program, model *SemanticModel, options CompileOptions, atExit, usesIntrospection bool, exceptionRuntime string) map[string]string {
 	filesByPackage := map[string][]*File{}
 	for _, file := range program.Files {
 		filesByPackage[file.Package] = append(filesByPackage[file.Package], file)

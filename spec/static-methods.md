@@ -565,6 +565,53 @@ fmt.Println(user.Greeting())
 
 ---
 
+# Static Fields and Initialization
+
+A class can declare typed, mutable static fields and static initializer blocks.
+
+```go
+class Defaults {
+    static Port int = 8080
+    static Label string
+    static {
+        Defaults.Label = "http"
+    }
+
+    static func Endpoint() string {
+        return Defaults.Label
+    }
+}
+```
+
+Static storage starts with the Go zero value. The first GPP constructor call,
+static method invocation, or class-qualified field read or write initializes
+the declaring class. Parent classes initialize before the class's own fields
+and blocks, which run in source order. Access through a subclass to an
+inherited member initializes its declaring class. Class literals and native
+Go struct literals are passive.
+
+Constructor calls initialize the class before evaluating their arguments.
+Static method invocations and simple static field assignments evaluate their
+arguments or right-hand expression before triggering initialization.
+
+When several goroutines access an uninitialized class, one runs the initializer
+and publishes its results to the others. A recursive access from that same
+goroutine can observe partially initialized fields. A GPP exception raised
+during initialization becomes an `ExceptionInInitializerError` unless it
+already represents a Java error. Subsequent access raises
+`NoClassDefFoundError` with the original failure in its cause chain. A native
+Go panic retains its panic value.
+
+Go callers can use generated static methods and typed field accessors such as
+`GppStatic_Defaults_Endpoint`, `GppGetStatic_Defaults_Port`, and
+`GppSetStatic_Defaults_Port`. The accessors run the same initialization protocol.
+
+This syntax currently uses class-qualified field references. Compile-time
+constant fields, interface initialization, and static field annotation metadata
+require additional Java compatibility work.
+
+---
+
 # Non-goals
 
 Do not add in this feature:
@@ -572,10 +619,7 @@ Do not add in this feature:
 * late-bound static dispatch
 * metaclasses
 * class objects as runtime receivers
-* static fields
-* static constructors
 * checked factory semantics
-* Java/C#-style static initialization blocks
 
 These can be considered separately if needed.
 

@@ -2219,6 +2219,12 @@ func staticExpressionTypeNode(expression ExprNode, context constructorContext, v
 			return staticExpressionTypeNode(value.Left, context, valueTypes)
 		}
 	case *SelectorExpr:
+		if receiver, ok := directSelectorPath(value.Receiver); ok {
+			_, shadowed := valueTypes[strings.SplitN(receiver, ".", 2)[0]]
+			if ref, found := resolveStaticField(receiver, value.Name, context); found && !shadowed {
+				return fieldTypeSource(*ref.field)
+			}
+		}
 		if qualified, ok := directSelectorPath(value); ok {
 			if target, ok := context.Targets[qualified]; ok && target.Class != nil {
 				return qualified

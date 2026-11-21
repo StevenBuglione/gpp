@@ -127,6 +127,7 @@ func ParseFile(name, src string) (*File, error) {
 			setClassAnnotationLocations(class, name)
 			attachMethodOwners(file, class.Methods)
 			attachFieldOwners(file, class.Fields)
+			attachFieldOwners(file, class.StaticFields)
 
 			file.Decls = append(file.Decls, class)
 			pos = end
@@ -1222,13 +1223,20 @@ func parseClassBody(class *ClassDecl, body string, sourceBase int, fullSource st
 			pos++
 			continue
 		}
+		static := keywordAt(body, pos, "static")
+		if static {
+			pos = skipSpace(body, pos+len("static"))
+			if pos == len(body) {
+				return fmt.Errorf("class %s: static requires a field, method or initializer block", class.Name)
+			}
+		}
 		if body[pos] == '{' {
 			close, err := findMatchingBrace(body, pos)
 			if err != nil {
 				return err
 			}
 			bodyStart := sourceBase + pos + 1
-			blockTokens, err := LexSource("instance initializer", body[pos+1:close])
+			blockTokens, err := LexSource("class initializer", body[pos+1:close])
 			if err != nil {
 				return err
 			}
@@ -1237,31 +1245,12 @@ func parseClassBody(class *ClassDecl, body string, sourceBase int, fullSource st
 				return err
 			}
 			block.SpanValue = sourceSpan(fullSource, sourceBase+pos, sourceBase+close+1)
-			class.InstanceInitializers = append(class.InstanceInitializers, block)
+			if static {
+				class.StaticInitializers = append(class.StaticInitializers, block)
+			} else {
+				class.InstanceInitializers = append(class.InstanceInitializers, block)
+			}
 			pos = close + 1
-			continue
-		}
-
-		if keywordAt(body, pos, "static") {
-			staticPos := pos
-			pos = skipSpace(body, pos+len("static"))
-			if !keywordAt(body, pos, "func") {
-				return fmt.Errorf(
-					"class %s: static must be followed by func",
-					class.Name,
-				)
-			}
-			method, end, err := parseMethod(body, pos, sourceBase, fullSource)
-			if err != nil {
-				return err
-			}
-			method.IsStatic = true
-			if end <= staticPos {
-				return fmt.Errorf("class %s: invalid static method", class.Name)
-			}
-			method.Doc = doc
-			class.Methods = append(class.Methods, method)
-			pos = end
 			continue
 		}
 
@@ -1273,6 +1262,7 @@ func parseClassBody(class *ClassDecl, body string, sourceBase int, fullSource st
 			}
 
 			method.Doc = doc
+			method.IsStatic = static
 			class.Methods = append(class.Methods, method)
 			pos = end
 			continue
@@ -1306,7 +1296,11 @@ func parseClassBody(class *ClassDecl, body string, sourceBase int, fullSource st
 				}
 			}
 
-			class.Fields = append(class.Fields, field)
+			if static {
+				class.StaticFields = append(class.StaticFields, field)
+			} else {
+				class.Fields = append(class.Fields, field)
+			}
 		}
 
 		pos = next

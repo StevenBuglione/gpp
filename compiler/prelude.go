@@ -145,7 +145,7 @@ func preludeExtensionsUsedInFile(file *File) (map[string]bool, error) {
 		case *FunctionDecl:
 			tokenGroups = append(tokenGroups, methodBodyTokens(value.Method))
 		case *ClassDecl:
-			tokenGroups = append(tokenGroups, instanceInitializerTokens(value))
+			tokenGroups = append(tokenGroups, classInitializerTokens(value))
 			for _, method := range value.Methods {
 				tokenGroups = append(tokenGroups, methodBodyTokens(method))
 			}

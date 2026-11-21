@@ -169,6 +169,7 @@ type constructorContext struct {
 	InitializerFailureOutput   bool
 	InitializerDelegationTypes map[string]string
 	RunInstanceInitializers    bool
+	StaticInitialization       *staticInitializationContext
 	DeferConstructorLowering   bool
 	CurrentResultAST           TypeNode
 	CurrentExtensionReceiver   string
@@ -257,6 +258,7 @@ func localConstructorContext(classes map[string]*ClassDecl) constructorContext {
 		StaticMethodSignatures: map[string]map[string][]callableSignature{},
 		Introspection:          newIntrospectionContext(classes),
 		Exceptions:             &exceptionContext{},
+		StaticInitialization:   &staticInitializationContext{},
 		Annotations:            map[string]*AnnotationDecl{},
 	}
 
@@ -337,6 +339,10 @@ func emitFile(file *File, context constructorContext) ([]byte, error) {
 	}
 	body = insertAfterImports(body, templateImports)
 	body = rewriteLogicalPackageImports(body, file.Imports, context.ModulePath)
+	body, err = rewriteStaticFields(body, context)
+	if err != nil {
+		return nil, err
+	}
 	if regexAlias != "" {
 		sourceKey := file.SourcePath
 		if sourceKey == "" {
@@ -396,6 +402,17 @@ func emitFile(file *File, context constructorContext) ([]byte, error) {
 	}
 
 	declarationsPrefix := localRuntimeImports + embedDefinitions + templateDefinitions
+	emitsStaticInitialization := fileEmitsStaticInitialization(file, context)
+	if emitsStaticInitialization {
+		if context.ModulePath != "" {
+			body = insertAfterImports(body, fmt.Sprintf("import __gppClassInitRuntime %q\n\n", context.ModulePath+"/"+classInitializationRuntimePath))
+		} else if !context.StaticInitialization.LocalRuntimeEmitted {
+			runtimeAliases, imports := classInitializationImports(localRuntimeImports + body)
+			declarationsPrefix = imports + declarationsPrefix
+			declarationsPrefix += classInitializationRuntime(runtimeAliases[0], runtimeAliases[1], runtimeAliases[2], "__gpp")
+			context.StaticInitialization.LocalRuntimeEmitted = true
+		}
+	}
 	if (fileHasTernary(file) || fileHasTernary(&File{Source: body})) &&
 		(context.Ternary == nil || !context.Ternary.RuntimeEmitted) {
 		declarationsPrefix += ternaryRuntimeDefinitions()
@@ -408,8 +425,11 @@ func emitFile(file *File, context constructorContext) ([]byte, error) {
 		if file.OfficialPackage == javaRuntimePackage {
 			raise, unwrap = "Raise", "UnwrapRaised"
 		} else if importPath := context.Exceptions.RuntimeImport; importPath != "" {
-			alias := generatedImportAlias(body, "__gppJavaRuntime")
-			body = insertAfterImports(body, fmt.Sprintf("import %s %q\n", alias, importPath))
+			alias := "__gppClassInitRuntime"
+			if importPath != context.ModulePath+"/"+classInitializationRuntimePath || !emitsStaticInitialization {
+				alias = generatedImportAlias(body, "__gppJavaRuntime")
+				body = insertAfterImports(body, fmt.Sprintf("import %s %q\n", alias, importPath))
+			}
 			raise, unwrap = alias+".Raise", alias+".UnwrapRaised"
 		}
 		declarationsPrefix += exceptionRuntimeSourceMarker + "\n" + exceptionRuntimeDefinitions(raise, unwrap)
@@ -1956,6 +1976,9 @@ func emitClass(out *strings.Builder, file *File, class *ClassDecl, context const
 		}
 		methods = append(methods, body)
 	}
+	if err := emitStaticInitialization(out, class, classes, context, sourcePath, interpolationName); err != nil {
+		return err
+	}
 	initializerParents := make(map[string][]initializerParentCall)
 	failureOutputs := make(map[string]bool)
 	delegatingInitializers := make(map[string]bool)
@@ -3064,6 +3087,9 @@ func emitStaticMethod(out *strings.Builder, sourcePath string, class *ClassDecl,
 		fmt.Fprintf(out, " %s", result)
 	}
 	out.WriteString(" {\n")
+	if guard := staticMethodInitializationCall(class, method, context); guard != "" {
+		fmt.Fprintf(out, "\t%s()\n", guard)
+	}
 
 	methodContext := context
 	methodContext.CurrentClass = ""
@@ -4677,7 +4703,7 @@ func fileHasInterpolation(file *File) bool {
 				return true
 			}
 		case *ClassDecl:
-			if tokensNeedInterpolationLowering(instanceInitializerTokens(d)) {
+			if tokensNeedInterpolationLowering(classInitializerTokens(d)) {
 				return true
 			}
 			for _, method := range d.Methods {
@@ -4710,7 +4736,7 @@ func fileHasInterpolationExpression(file *File) bool {
 		case *ValueDecl:
 			tokens = valueDeclTokens(value)
 		case *ClassDecl:
-			if tokensHaveInterpolation(instanceInitializerTokens(value)) {
+			if tokensHaveInterpolation(classInitializerTokens(value)) {
 				return true
 			}
 			for _, method := range value.Methods {

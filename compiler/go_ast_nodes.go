@@ -1131,11 +1131,19 @@ func constructorExprNode(call *CallExpr, context constructorContext) (ExprNode, 
 			constructorInitializers = append(constructorInitializers, constructorInitializer{Helper: instanceInitializerMethod})
 		}
 	}
-	if len(constructorInitializers) == 0 {
+	var guard ExprNode
+	if needsClassInitialization(class, classes, map[*ClassDecl]bool{}) {
+		name := classInitializationCall(class, "")
+		guard = &NameExpr{Name: name}
+		if target.Qualifier != "" {
+			guard = &SelectorExpr{Receiver: &NameExpr{Name: target.Qualifier}, Name: name}
+		}
+	}
+	if len(constructorInitializers) == 0 && guard == nil {
 		return instance, true, nil
 	}
 	bindOwner := len(classParentNames(class)) != 0 && context.Introspection != nil && context.Introspection.Enabled
-	return constructorInitializationExpr(name, instance, constructorInitializers, bindOwner), true, nil
+	return constructorInitializationExpr(name, instance, constructorInitializers, bindOwner, guard), true, nil
 }
 
 func constructorCallMayReturnError(call *CallExpr, target constructorTarget, context constructorContext) bool {
@@ -1402,14 +1410,18 @@ func initializerDelegationCall(initializer Method) *CallExpr {
 	return nil
 }
 
-func constructorInitializationExpr(typeName string, instance ExprNode, initializers []constructorInitializer, bindOwner bool) ExprNode {
+func constructorInitializationExpr(typeName string, instance ExprNode, initializers []constructorInitializer, bindOwner bool, guard ExprNode) ExprNode {
 	valueName := "__gpp_instance"
 	errName := "__gpp_initErr"
-	statements := []Stmt{&DeclarationStmt{
+	var statements []Stmt
+	if guard != nil {
+		statements = append(statements, &ExpressionStmt{Expression: &CallExpr{Callee: guard}})
+	}
+	statements = append(statements, &DeclarationStmt{
 		Keyword: ":=",
 		Names:   []Token{{Text: valueName, Kind: TokenIdentifier}},
 		Values:  []ExprNode{instance},
-	}}
+	})
 	if bindOwner {
 		statements = append(statements, &ExpressionStmt{Expression: &CallExpr{
 			Callee:    &SelectorExpr{Receiver: &NameExpr{Name: valueName}, Name: bindClassObjectMethod},

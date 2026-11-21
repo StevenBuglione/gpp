@@ -28,26 +28,30 @@ func hasInstanceInitializers(class *ClassDecl) bool {
 }
 
 func instanceInitializerOrder(class *ClassDecl) []instanceInitializer {
+	return classInitializerOrder(class.Fields, class.InstanceInitializers)
+}
+
+func classInitializerOrder(fields []Field, blocks []*BlockStmt) []instanceInitializer {
 	var result []instanceInitializer
-	for index := range class.Fields {
-		field := &class.Fields[index]
+	for index := range fields {
+		field := &fields[index]
 		if field.InitializerAST != nil {
 			result = append(result, instanceInitializer{span: field.Span(), field: field})
 		}
 	}
-	for _, block := range class.InstanceInitializers {
+	for _, block := range blocks {
 		result = append(result, instanceInitializer{span: block.Span(), block: block})
 	}
 	slices.SortFunc(result, func(left, right instanceInitializer) int { return cmp.Compare(left.span.Start, right.span.Start) })
 	return result
 }
 
-func instanceInitializerTokens(class *ClassDecl) []Token {
-	if class.Owner == nil || !hasInstanceInitializers(class) {
+func classInitializerTokens(class *ClassDecl) []Token {
+	if class.Owner == nil {
 		return nil
 	}
 	var tokens []Token
-	for _, item := range instanceInitializerOrder(class) {
+	for _, item := range append(instanceInitializerOrder(class), staticInitializerOrder(class)...) {
 		span := item.span
 		if item.field != nil {
 			span = item.field.InitializerSpan
@@ -66,12 +70,12 @@ func instanceInitializerTokens(class *ClassDecl) []Token {
 }
 
 func classMethodsForMemberValidation(class *ClassDecl) []Method {
-	tokens := instanceInitializerTokens(class)
+	tokens := classInitializerTokens(class)
 	if len(tokens) == 0 {
 		return class.Methods
 	}
 	return append(slices.Clone(class.Methods), Method{
-		Name:       "instance initializer",
+		Name:       "class initializer",
 		Owner:      class.Owner,
 		SpanValue:  tokens[0].Span,
 		BodyTokens: tokens,
@@ -82,9 +86,12 @@ func classMethodsForMemberValidation(class *ClassDecl) []Method {
 // dispatch, implicit receiver access and exceptions match constructor bodies.
 // Keep the original line positions for diagnostics and debugging.
 func buildInstanceInitializerMethod(class *ClassDecl) (Method, error) {
-	items := instanceInitializerOrder(class)
+	return buildClassInitializerMethod(class, instanceInitializerOrder(class), "this", instanceInitializerBody, false)
+}
+
+func buildClassInitializerMethod(class *ClassDecl, items []instanceInitializer, receiver, name string, static bool) (Method, error) {
 	if class.Owner == nil {
-		return Method{}, classDiagnosticf(class, "instance initializers require a class source file")
+		return Method{}, classDiagnosticf(class, "initializers require a class source file")
 	}
 	var body strings.Builder
 	line := 1
@@ -96,7 +103,7 @@ func buildInstanceInitializerMethod(class *ClassDecl) (Method, error) {
 		span := item.span
 		if item.field != nil {
 			span = item.field.InitializerSpan
-			fmt.Fprintf(&body, "this.%s =", item.field.Name)
+			fmt.Fprintf(&body, "%s.%s =", receiver, item.field.Name)
 			for line < span.Line {
 				body.WriteByte('\n')
 				line++
@@ -104,7 +111,7 @@ func buildInstanceInitializerMethod(class *ClassDecl) (Method, error) {
 			body.WriteByte(' ')
 		}
 		if span.Start < 0 || span.Start > span.End || span.End > len(class.Owner.Source) {
-			return Method{}, classDiagnosticf(class, "invalid instance initializer source span")
+			return Method{}, classDiagnosticf(class, "invalid initializer source span")
 		}
 		text := class.Owner.Source[span.Start:span.End]
 		body.WriteString(text)
@@ -122,7 +129,8 @@ func buildInstanceInitializerMethod(class *ClassDecl) (Method, error) {
 		return Method{}, err
 	}
 	return Method{
-		Name:       instanceInitializerBody,
+		Name:       name,
+		IsStatic:   static,
 		Owner:      owner,
 		SpanValue:  items[0].span,
 		BodySpan:   sourceSpan(source, 0, len(source)),

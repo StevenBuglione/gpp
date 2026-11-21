@@ -24,16 +24,8 @@ type exceptionContext struct {
 
 const exceptionRuntimeSourceMarker = "// __gppGeneratedExceptionRuntime__"
 
-func exceptionRuntimeDefinitions(raise, unwrap string) string {
-	var thrownDefinitions string
-	if raise != "" {
-		thrownDefinitions = fmt.Sprintf(`func __gppThrow(err error) { %s(err) }
-
-func __gppUnwrapThrown(recovered any) (error, bool) { return %s(recovered) }
-
-`, raise, unwrap)
-	} else {
-		thrownDefinitions = `type __gppThrownError struct {
+func localExceptionABI(raise, unwrap string) string {
+	return strings.NewReplacer("__gppThrow(", raise+"(", "__gppUnwrapThrown(", unwrap+"(").Replace(`type __gppThrownError struct {
 	err error
 }
 
@@ -52,7 +44,19 @@ func __gppUnwrapThrown(recovered any) (error, bool) {
 	return thrown.err, ok
 }
 
-`
+`)
+}
+
+func exceptionRuntimeDefinitions(raise, unwrap string) string {
+	var thrownDefinitions string
+	if raise != "" {
+		thrownDefinitions = fmt.Sprintf(`func __gppThrow(err error) { %s(err) }
+
+func __gppUnwrapThrown(recovered any) (error, bool) { return %s(recovered) }
+
+`, raise, unwrap)
+	} else {
+		thrownDefinitions = localExceptionABI("__gppThrow", "__gppUnwrapThrown")
 	}
 	return thrownDefinitions + `type __gppExceptionReturn struct {
 	values []any

@@ -970,6 +970,9 @@ func validateClass(pkg *PackageSymbols, class *ClassDecl) error {
 	if err := validateInstanceInitializers(class); err != nil {
 		return err
 	}
+	if err := validateStaticInitializers(class, fields); err != nil {
+		return err
+	}
 
 	parents := map[string]bool{}
 	for _, parentName := range classParentNames(class) {

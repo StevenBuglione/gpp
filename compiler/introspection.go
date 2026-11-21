@@ -35,7 +35,7 @@ func fileUsesIntrospection(file *File) bool {
 				return true
 			}
 		case *ClassDecl:
-			if len(classParentNames(value)) > 0 || tokenSequence(instanceInitializerTokens(value), ".", "class") {
+			if len(classParentNames(value)) > 0 || tokenSequence(classInitializerTokens(value), ".", "class") {
 				return true
 			}
 			if len(value.Annotations) > 0 {

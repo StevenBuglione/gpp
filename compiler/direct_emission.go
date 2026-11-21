@@ -88,6 +88,9 @@ func directStaticMethodSource(class *ClassDecl, method Method, context construct
 		return "", true, err
 	}
 	rewriteProtectedMemberSelectors(body, class, classesForClass(context, class), method)
+	if guard := staticMethodInitializationCall(class, method, context); guard != "" {
+		body.List = append([]ast.Stmt{&ast.ExprStmt{X: &ast.CallExpr{Fun: ast.NewIdent(guard)}}}, body.List...)
+	}
 	return formatDirectFunctionDecl(staticMethodGoName(class, method), nil, method.TypeParamsAST, method.ParameterAST, method.ResultAST, method.ResultFieldsAST, methodContext, !method.Generated, body)
 }
 

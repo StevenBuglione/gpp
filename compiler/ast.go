@@ -232,6 +232,8 @@ type ClassDecl struct {
 	SerializationQualifier string
 	Fields                 []Field
 	InstanceInitializers   []*BlockStmt
+	StaticFields           []Field
+	StaticInitializers     []*BlockStmt
 	Methods                []Method
 	SpanValue              Span
 }
