@@ -14,7 +14,9 @@ underscore adds a protected level for subclass access.
 - **Protected** members begin with `_` and are available to the declaring
   class and its subclasses. They are not part of the GPP public API.
 
-The convention applies to fields, instance methods, and static methods:
+The convention applies to instance and static fields and methods.
+Qualified static accesses and simple names inside class methods and
+initializers use the same rules.
 
 ```go
 class Base {

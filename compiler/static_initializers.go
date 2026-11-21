@@ -262,15 +262,11 @@ func findStaticField(class *ClassDecl, name, qualifier string, classes map[strin
 	if class == nil || visiting[class] {
 		return staticFieldReference{}, false
 	}
-	for _, field := range class.Fields {
-		if field.Name == name {
-			return staticFieldReference{}, false
+	if field, declared := lookupDeclaredStaticField(class, name); declared {
+		if field != nil {
+			return staticFieldReference{owner: class, field: field, qualifier: qualifier}, true
 		}
-	}
-	for index := range class.StaticFields {
-		if class.StaticFields[index].Name == name {
-			return staticFieldReference{owner: class, field: &class.StaticFields[index], qualifier: qualifier}, true
-		}
+		return staticFieldReference{}, false
 	}
 	visiting[class] = true
 	defer delete(visiting, class)
@@ -285,6 +281,21 @@ func findStaticField(class *ClassDecl, name, qualifier string, classes map[strin
 		}
 	}
 	return staticFieldReference{}, false
+}
+
+// An instance field with the same name hides an inherited static field.
+func lookupDeclaredStaticField(class *ClassDecl, name string) (*Field, bool) {
+	for _, field := range class.Fields {
+		if field.Name == name {
+			return nil, true
+		}
+	}
+	for index := range class.StaticFields {
+		if class.StaticFields[index].Name == name {
+			return &class.StaticFields[index], true
+		}
+	}
+	return nil, false
 }
 
 // The emitted Go still carries class-qualified field selectors from both
@@ -437,7 +448,7 @@ func markStaticFieldAddress(expression ast.Expr, address map[*ast.SelectorExpr]b
 func staticFieldQualifier(expression ast.Expr, fileScope *ast.Scope) string {
 	switch value := expression.(type) {
 	case *ast.Ident:
-		if value.Obj == nil || (value.Obj.Kind == ast.Typ && value.Obj == fileScope.Lookup(value.Name)) {
+		if value.Obj == nil || (fileScope != nil && value.Obj.Kind == ast.Typ && value.Obj == fileScope.Lookup(value.Name)) {
 			return value.Name
 		}
 	case *ast.SelectorExpr:

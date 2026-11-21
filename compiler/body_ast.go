@@ -517,6 +517,10 @@ func (parser *bodyParser) parseStatement() (*statementDraft, error) {
 		return nil, nil
 	}
 	parser.index = start
+	if parser.isPunctuation(start, ';') {
+		parser.index++
+		return newStatementDraft(parser.tokens[start:parser.index], nil, nil), nil
+	}
 
 	// A label precedes another statement. Keep both nodes even when the
 	// labeled statement starts on the same line.

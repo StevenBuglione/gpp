@@ -7,14 +7,14 @@ import (
 	"strings"
 )
 
-func validateFileMemberVisibility(model *SemanticModel, pkg *PackageSymbols, file *File) error {
+func validateFileMemberVisibility(model *SemanticModel, pkg *PackageSymbols, file *File, staticFields *staticFieldVisibility) error {
 	if file == nil || pkg == nil {
 		return nil
 	}
 	for _, declaration := range file.Decls {
 		switch value := declaration.(type) {
 		case *FunctionDecl:
-			if err := validateMemberVisibilityInMethod(model, pkg, nil, value.Method, ""); err != nil {
+			if err := staticFields.validateMethod(pkg, nil, value.Method, ""); err != nil {
 				return err
 			}
 		case *MixedDecl:
@@ -27,7 +27,7 @@ func validateFileMemberVisibility(model *SemanticModel, pkg *PackageSymbols, fil
 					SourceFile:   value.SourceFile,
 					SourceLine:   value.SourceLine,
 				}
-				if err := validateGoDeclMemberVisibility(model, pkg, raw); err != nil {
+				if err := validateGoDeclMemberVisibility(model, pkg, raw, staticFields); err != nil {
 					return err
 				}
 			}
@@ -35,13 +35,16 @@ func validateFileMemberVisibility(model *SemanticModel, pkg *PackageSymbols, fil
 				if function == nil {
 					continue
 				}
-				if err := validateMemberVisibilityInMethod(model, pkg, nil, function.Method, ""); err != nil {
+				if err := staticFields.validateMethod(pkg, nil, function.Method, ""); err != nil {
 					return err
 				}
 			}
 		case *ClassDecl:
+			if err := staticFields.validateInitializers(value); err != nil {
+				return err
+			}
 			for _, method := range value.Methods {
-				if err := validateMemberVisibilityInMethod(model, pkg, value, method, ""); err != nil {
+				if err := staticFields.validateMethod(pkg, value, method, ""); err != nil {
 					return err
 				}
 			}
@@ -50,7 +53,7 @@ func validateFileMemberVisibility(model *SemanticModel, pkg *PackageSymbols, fil
 				Owner:   value.Owner,
 				BodyAST: &BlockStmt{Statements: []Stmt{&DeclarationStmt{Values: value.Values}}},
 			}
-			if err := validateMemberVisibilityInMethod(model, pkg, nil, method, ""); err != nil {
+			if err := staticFields.validateMethod(pkg, nil, method, ""); err != nil {
 				return err
 			}
 		case *ExtendDecl:
@@ -62,12 +65,12 @@ func validateFileMemberVisibility(model *SemanticModel, pkg *PackageSymbols, fil
 				if err != nil {
 					continue
 				}
-				if err := validateMemberVisibilityInMethod(model, pkg, nil, method, target); err != nil {
+				if err := staticFields.validateMethod(pkg, nil, method, target); err != nil {
 					return err
 				}
 			}
 		case *GoDecl:
-			if err := validateGoDeclMemberVisibility(model, pkg, value); err != nil {
+			if err := validateGoDeclMemberVisibility(model, pkg, value, staticFields); err != nil {
 				return err
 			}
 		}
@@ -75,7 +78,7 @@ func validateFileMemberVisibility(model *SemanticModel, pkg *PackageSymbols, fil
 	return nil
 }
 
-func validateGoDeclMemberVisibility(model *SemanticModel, pkg *PackageSymbols, declaration *GoDecl) error {
+func validateGoDeclMemberVisibility(model *SemanticModel, pkg *PackageSymbols, declaration *GoDecl, staticFields *staticFieldVisibility) error {
 	if declaration == nil {
 		return nil
 	}
@@ -89,6 +92,9 @@ func validateGoDeclMemberVisibility(model *SemanticModel, pkg *PackageSymbols, d
 				}
 				switch value := node.(type) {
 				case *ast.SelectorExpr:
+					if visibilityErr = staticFields.checkNativeSelector(declaration, value); visibilityErr != nil {
+						return false
+					}
 					typeName := goMemberVisibilityExprType(model, pkg, value.X, map[string]string{})
 					class := semanticClassForTypeName(pkg, typeName)
 					owner, found := semanticMemberOwner(model, pkg, class, value.Sel.Name, map[*ClassDecl]bool{})
@@ -194,6 +200,9 @@ func validateGoDeclMemberVisibility(model *SemanticModel, pkg *PackageSymbols, d
 			}
 			switch value := node.(type) {
 			case *ast.SelectorExpr:
+				if visibilityErr = staticFields.checkNativeSelector(declaration, value); visibilityErr != nil {
+					return false
+				}
 				typeName := goMemberVisibilityExprType(model, pkg, value.X, valueTypes)
 				class := semanticClassForTypeName(pkg, typeName)
 				owner, found := semanticMemberOwner(model, pkg, class, value.Sel.Name, map[*ClassDecl]bool{})

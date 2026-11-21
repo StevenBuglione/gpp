@@ -322,6 +322,7 @@ func ResolveProgramWithModulePath(program *Program, modulePath string) (*Semanti
 		packageNames = append(packageNames, name)
 	}
 	sort.Strings(packageNames)
+	staticFields := &staticFieldVisibility{model: model, modulePath: modulePath, enabled: programHasStaticFields(program.Files)}
 	for _, packageName := range packageNames {
 		pkg := model.Packages[packageName]
 		templateNames := make([]string, 0, len(pkg.Templates))
@@ -408,7 +409,7 @@ func ResolveProgramWithModulePath(program *Program, modulePath string) (*Semanti
 			if err := validateFileEnumSwitches(file, pkg, model, modulePath); err != nil {
 				diagnostics = append(diagnostics, DiagnosticsOf(err)...)
 			}
-			if err := validateFileMemberVisibility(model, pkg, file); err != nil {
+			if err := validateFileMemberVisibility(model, pkg, file, staticFields); err != nil {
 				diagnostics = append(diagnostics, err)
 			}
 			if err := validateFileAnnotations(file, pkg, pkg.Annotations, true); err != nil {

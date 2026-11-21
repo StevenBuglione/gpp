@@ -11,13 +11,19 @@ import (
 const staticFieldScopePrefix = "__gppStaticScope_"
 
 type fieldLocalScope struct {
-	parent  *fieldLocalScope
-	names   map[string]bool
-	closure bool
+	parent            *fieldLocalScope
+	names             map[string]bool
+	closure           bool
+	qualifiedSelector func(string, *SelectorExpr)
 }
 
 func newFieldLocalScope(parent *fieldLocalScope) *fieldLocalScope {
-	return &fieldLocalScope{parent: parent, names: map[string]bool{}, closure: parent != nil && parent.closure}
+	scope := &fieldLocalScope{parent: parent, names: map[string]bool{}}
+	if parent != nil {
+		scope.closure = parent.closure
+		scope.qualifiedSelector = parent.qualifiedSelector
+	}
+	return scope
 }
 
 func (scope *fieldLocalScope) contains(name string) bool {
@@ -155,6 +161,11 @@ func (visit classFieldVisitor) expression(expr ExprNode, scope *fieldLocalScope,
 	case *AssignmentExpr:
 		visit.assignment(node.Left, node.Right, node.Operator, scope)
 	case *SelectorExpr:
+		if scope.qualifiedSelector != nil {
+			if qualifier := scopedClassQualifier(node.Receiver, scope); qualifier != "" {
+				scope.qualifiedSelector(qualifier, node)
+			}
+		}
 		if write {
 			if receiver, ok := node.Receiver.(*NameExpr); ok && !scope.contains(receiver.Name) {
 				visit(classFieldUse{name: &NameExpr{Name: node.Name, SpanValue: node.Span()}, qualifier: receiver.Name, write: true, closure: scope.closure})
@@ -233,6 +244,20 @@ func (visit classFieldVisitor) expression(expr ExprNode, scope *fieldLocalScope,
 		}
 		visit.block(node.Body, nested)
 	}
+}
+
+func scopedClassQualifier(expression ExprNode, scope *fieldLocalScope) string {
+	switch receiver := expression.(type) {
+	case *NameExpr:
+		if !scope.contains(receiver.Name) {
+			return receiver.Name
+		}
+	case *SelectorExpr:
+		if root, ok := receiver.Receiver.(*NameExpr); ok && !scope.contains(root.Name) {
+			return root.Name + "." + receiver.Name
+		}
+	}
+	return ""
 }
 
 func simpleCallName(callee ExprNode) *NameExpr {
