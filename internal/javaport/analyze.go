@@ -147,6 +147,7 @@ type MethodBody struct {
 type JavaStatement struct {
 	Kind       string           `json:"kind"`
 	Expression *JavaExpression  `json:"expression,omitempty"`
+	Detail     *JavaExpression  `json:"detail,omitempty"`
 	Body       *MethodBody      `json:"body,omitempty"`
 	Catches    []JavaCatch      `json:"catches,omitempty"`
 	Finally    *MethodBody      `json:"finally,omitempty"`

@@ -1,4 +1,5 @@
 import com.sun.source.tree.ArrayAccessTree;
+import com.sun.source.tree.AssertTree;
 import com.sun.source.tree.AssignmentTree;
 import com.sun.source.tree.BinaryTree;
 import com.sun.source.tree.BlockTree;
@@ -295,6 +296,11 @@ class JavaSourceAnalysis {
                 expression = thrown.getExpression();
             } else if (statement instanceof ExpressionStatementTree expressionStatement) {
                 expression = expressionStatement.getExpression();
+            } else if (statement instanceof AssertTree asserted) {
+                expression = asserted.getCondition();
+                if (asserted.getDetail() != null) {
+                    record += ",\"detail\":" + executableExpression(new TreePath(path, asserted.getDetail()));
+                }
             } else if (statement instanceof TryTree attempted) {
                 var block = attempted.getBlock();
                 record += ",\"body\":" + bodyRecord(new TreePath(path, block), block.getStatements()) +

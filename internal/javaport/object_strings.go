@@ -41,6 +41,11 @@ func (program *javaObjectProgram) mappedObjectType(javaType string) string {
 }
 
 func (program *javaObjectProgram) stringLiteral(encoded *string) (string, error) {
+	program.runtime = true
+	return javaStringLiteral(encoded)
+}
+
+func javaStringLiteral(encoded *string) (string, error) {
 	if encoded == nil {
 		return "", fmt.Errorf("missing attributed Java String constant")
 	}
@@ -48,7 +53,6 @@ func (program *javaObjectProgram) stringLiteral(encoded *string) (string, error)
 	if err != nil || len(data)%2 != 0 {
 		return "", fmt.Errorf("invalid UTF-16 code units in Java String constant")
 	}
-	program.runtime = true
 	return "javart.InternStringLiteral(" + strconv.Quote(string(data)) + ")", nil
 }
 

@@ -21,6 +21,7 @@ type javaObjectClass struct {
 	embed                  bool
 	checksErrors           bool
 	closeable              bool
+	hasAssertions          bool
 	crossPackageDescendant bool
 }
 
@@ -117,6 +118,7 @@ func prepareJavaObjects(files []SourceFile) (*javaObjectProgram, error) {
 		}
 	}
 	for _, class := range classes {
+		class.findAssertions()
 		if err := program.layoutClass(class); err != nil {
 			return nil, err
 		}

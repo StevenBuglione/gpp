@@ -28,6 +28,15 @@ func emitPrimitiveUtilityClasses(report Report) (string, error) {
 			!slices.Contains(class.Modifiers, "PUBLIC") || !slices.Contains(class.Modifiers, "FINAL") {
 			return "", unsupportedSource(file, class, "expected one public final utility class")
 		}
+		assertions := javaAssertionStatus{}
+		for _, member := range file.Declarations[1:] {
+			if member.Body.containsStatement(isJavaAssertion) {
+				assertions = javaAssertionStatus{storage: "javaAssertions" + class.Name, className: class.Symbol}
+				lowering.javaRuntime = true
+				fmt.Fprintf(&methods, "\nvar %s javart.AssertionStatus\n", assertions.storage)
+				break
+			}
+		}
 		hasConstructor := false
 		methodCount := 0
 		for _, member := range file.Declarations[1:] {
@@ -51,7 +60,7 @@ func emitPrimitiveUtilityClasses(report Report) (string, error) {
 			if !token.IsExported(method) || !token.IsIdentifier(name) || names[name] {
 				return "", unsupportedSource(file, member, "overloaded or colliding exported method name")
 			}
-			text, err := lowering.emitMethod(name, member)
+			text, err := lowering.emitMethod(name, member, assertions)
 			if err != nil {
 				return "", unsupportedSource(file, member, err.Error())
 			}
@@ -87,13 +96,11 @@ func (lowering primitiveLowering) emitNativeImports(out *strings.Builder) {
 	}
 }
 
-func (lowering *primitiveLowering) emitMethod(name string, declaration Occurrence) (string, error) {
+func (lowering *primitiveLowering) emitMethod(name string, declaration Occurrence, assertions javaAssertionStatus) (string, error) {
 	result := lowering.signatureType(declaration.Result)
-	if result == "" || len(declaration.Modifiers) != 2 || !slices.Contains(declaration.Modifiers, "PUBLIC") ||
-		!slices.Contains(declaration.Modifiers, "STATIC") ||
-		len(declaration.Body.Code) != 1 || declaration.Body.Code[0].Kind != "RETURN" ||
-		declaration.Body.Code[0].Expression == nil {
-		return "", fmt.Errorf("expected a public static method with one supported return expression")
+	if (result == "" && declaration.Result != "void") || len(declaration.Modifiers) != 2 ||
+		!slices.Contains(declaration.Modifiers, "PUBLIC") || !slices.Contains(declaration.Modifiers, "STATIC") {
+		return "", fmt.Errorf("expected a public static method with a supported result type")
 	}
 
 	arguments := map[string]string{}
@@ -108,13 +115,42 @@ func (lowering *primitiveLowering) emitMethod(name string, declaration Occurrenc
 		parameters = append(parameters, generatedName+" "+goType)
 	}
 
-	expression := declaration.Body.Code[0].Expression
-	value, err := lowering.utilityValue(expression, declaration.Result, arguments)
+	var body strings.Builder
+	if assertions.storage != "" {
+		fmt.Fprintf(&body, "\t%s\n", assertions.enabled())
+	}
+	statements := declaration.Body.Code
+	for len(statements) > 0 && statements[0].Kind == "ASSERT" {
+		statement := statements[0]
+		code, err := emitJavaAssertion(statement, assertions,
+			func(condition *JavaExpression) (string, error) {
+				return lowering.utilityValue(condition, "boolean", arguments)
+			},
+			func(detail *JavaExpression) (string, error) {
+				if !simpleAssertionDetailType(detail.Type) {
+					return "", fmt.Errorf("unsupported Java assertion detail type %s", detail.Type)
+				}
+				return lowering.expression(detail, arguments)
+			})
+		if err != nil {
+			return "", fmt.Errorf("%d:%d: %w", statement.Line, statement.Column, err)
+		}
+		fmt.Fprintf(&body, "\t%s\n", code)
+		statements = statements[1:]
+	}
+	if declaration.Result == "void" && assertions.storage != "" &&
+		(len(statements) == 0 || len(statements) == 1 && statements[0].Kind == "RETURN" && statements[0].Expression == nil) {
+		return fmt.Sprintf("\nfunc %s(%s) {\n%s}\n", name, strings.Join(parameters, ", "), body.String()), nil
+	}
+	if len(statements) != 1 || statements[0].Kind != "RETURN" || statements[0].Expression == nil || result == "" {
+		return "", fmt.Errorf("expected assertions followed by one supported return expression")
+	}
+	value, err := lowering.utilityValue(statements[0].Expression, declaration.Result, arguments)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("\nfunc %s(%s) %s {\n\treturn %s\n}\n", name,
-		strings.Join(parameters, ", "), result, value), nil
+	fmt.Fprintf(&body, "\treturn %s\n", value)
+	return fmt.Sprintf("\nfunc %s(%s) %s {\n%s}\n", name, strings.Join(parameters, ", "), result, body.String()), nil
 }
 
 func (lowering *primitiveLowering) expression(expression *JavaExpression, arguments map[string]string) (string, error) {
@@ -160,6 +196,9 @@ func (lowering *primitiveLowering) expression(expression *JavaExpression, argume
 		}
 	case "NULL_LITERAL":
 		return "nil", nil
+	case "STRING_LITERAL":
+		lowering.javaRuntime = true
+		return javaStringLiteral(expression.UTF16LE)
 	case "BOOLEAN_LITERAL", "CHAR_LITERAL", "INT_LITERAL", "LONG_LITERAL", "FLOAT_LITERAL", "DOUBLE_LITERAL":
 		return lowering.literal(expression.Type, expression.Literal)
 	default:

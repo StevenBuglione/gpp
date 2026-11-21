@@ -12,6 +12,8 @@ const (
 	javaNullPointerException     = "java.lang.NullPointerException"
 	javaClassCastException       = "java.lang.ClassCastException"
 	javaArithmeticException      = "java.lang.ArithmeticException"
+	javaErrorType                = "java.lang.Error"
+	javaAssertionError           = "java.lang.AssertionError"
 	javaAutoCloseable            = "java.lang.AutoCloseable"
 )
 
@@ -19,6 +21,8 @@ var javaCatchTypes = map[string]string{
 	"java.lang.Throwable":                       "javart.Throwable",
 	"java.lang.Exception":                       "javart.Exception",
 	"java.lang.RuntimeException":                "javart.RuntimeException",
+	javaErrorType:                               "javart.Error",
+	javaAssertionError:                          "*javart.AssertionError",
 	javaIllegalArgumentException:                "*javart.IllegalArgumentException",
 	javaNullPointerException:                    "*javart.NullPointerException",
 	javaClassCastException:                      "*javart.ClassCastException",
@@ -53,11 +57,52 @@ func (statement *JavaStatement) containsStatement(matches func(string) bool) boo
 	}
 	if matches(statement.Kind) || statement.Body.containsStatement(matches) ||
 		statement.Then.containsStatement(matches) || statement.Else.containsStatement(matches) ||
-		statement.Nested.containsStatement(matches) {
+		statement.Nested.containsStatement(matches) || statement.Finally.containsStatement(matches) ||
+		statement.LoopInit.containsStatement(matches) || statement.LoopUpdate.containsStatement(matches) ||
+		statement.Expression.containsStatement(matches) || statement.Detail.containsStatement(matches) ||
+		javaSwitchCasesContainStatement(statement.Cases, matches) {
 		return true
 	}
-	for _, branch := range statement.Cases {
-		if branch.Group.containsStatement(matches) || branch.Rule.containsStatement(matches) {
+	if statement.Variable != nil && statement.Variable.Initializer.containsStatement(matches) {
+		return true
+	}
+	for _, handler := range statement.Catches {
+		if handler.Body.containsStatement(matches) {
+			return true
+		}
+	}
+	for _, resource := range statement.Resources {
+		if resource.Initializer.containsStatement(matches) {
+			return true
+		}
+	}
+	return false
+}
+
+func (expression *JavaExpression) containsStatement(matches func(string) bool) bool {
+	if expression == nil {
+		return false
+	}
+	if javaSwitchCasesContainStatement(expression.Cases, matches) {
+		return true
+	}
+	for _, child := range []*JavaExpression{expression.Target, expression.Operand, expression.Left, expression.Right,
+		expression.Condition, expression.WhenTrue, expression.WhenFalse} {
+		if child.containsStatement(matches) {
+			return true
+		}
+	}
+	for _, child := range expression.Arguments {
+		if child.containsStatement(matches) {
+			return true
+		}
+	}
+	return false
+}
+
+func javaSwitchCasesContainStatement(cases []JavaSwitchCase, matches func(string) bool) bool {
+	for _, branch := range cases {
+		if branch.Group.containsStatement(matches) || branch.Rule.containsStatement(matches) || branch.Value.containsStatement(matches) {
 			return true
 		}
 	}
@@ -192,6 +237,9 @@ func (ctx javaObjectContext) throwStatement(expression *JavaExpression) (string,
 }
 
 func (ctx javaObjectContext) newThrowable(expression *JavaExpression) (string, error) {
+	if expression.Type == javaAssertionError {
+		return ctx.newAssertionError(expression)
+	}
 	var constructor string
 	switch expression.Symbol {
 	case javaIOException + "#<init>()", javaIOException + "#<init>(java.lang.String)":

@@ -10,6 +10,10 @@ import (
 
 func (program *javaObjectProgram) emitClass(out *strings.Builder, class *javaObjectClass) error {
 	name := class.storageName(class.declaration.Name)
+	if class.hasAssertions {
+		program.runtime = true
+		fmt.Fprintf(out, "\nvar %s javart.AssertionStatus\n", class.assertionStatus().storage)
+	}
 	if class.parent != nil && class.parent.file.Package != class.file.Package {
 		fmt.Fprintf(out, "\ntype %s = %s\n", class.baseField(),
 			program.classReference(class.parent, class.parent.declaration.Name))
@@ -160,6 +164,7 @@ func (ctx javaObjectContext) emitConstructor(out *strings.Builder, method *javaO
 		return fmt.Errorf("requires a resolved this(...) or super(...) invocation before the constructor body")
 	}
 	fmt.Fprintf(out, "\nfunc (this *%s) %s(%s) {\n", name, method.internal, parameters)
+	ctx.emitAssertionInitialization(out)
 	if declaration.Body.containsTry() {
 		ctx.emitJavaReturnBoundary(out, "void")
 	}
@@ -209,6 +214,7 @@ func (ctx javaObjectContext) emitMethod(out *strings.Builder, method *javaObject
 		bodyResult = " (javaResult " + ctx.program.objectGoType(declaration.Result) + ")"
 	}
 	fmt.Fprintf(out, "\nfunc (this *%s) %s(%s)%s {\n", name, bodyName, parameters, bodyResult)
+	ctx.emitAssertionInitialization(out)
 	if hasTry {
 		ctx.emitJavaReturnBoundary(out, declaration.Result)
 	}
@@ -302,6 +308,8 @@ func (ctx javaObjectContext) statement(statement JavaStatement, result string) (
 		}
 	case "THROW":
 		return ctx.throwStatement(expression)
+	case "ASSERT":
+		return ctx.assertStatement(statement)
 	case "TRY":
 		return ctx.tryStatement(statement, result)
 	case "BLOCK":
@@ -476,6 +484,22 @@ func (ctx javaObjectContext) invoke(expression *JavaExpression) (string, error) 
 		value, err := ctx.expression(expression.Target)
 		ctx.program.runtime = true
 		return "javart.RequireNonNull(" + value + ").GetMessage()", err
+	}
+	if expression.Target != nil {
+		switch expression.Symbol {
+		case "java.lang.Throwable#getMessage()":
+			if javaCatchTypes[expression.Target.Type] != "" {
+				value, err := ctx.expression(expression.Target)
+				ctx.program.runtime = true
+				return "javart.ThrowableMessage(" + value + ")", err
+			}
+		case "java.lang.Throwable#getCause()":
+			if expression.Target.Type == javaAssertionError {
+				value, err := ctx.expression(expression.Target)
+				ctx.program.runtime = true
+				return "javart.RequireNonNull(" + value + ").GetCause()", err
+			}
+		}
 	}
 	if expression.Symbol == "java.lang.Throwable#getSuppressed()" && expression.Target != nil {
 		value, err := ctx.expression(expression.Target)

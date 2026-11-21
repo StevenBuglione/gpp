@@ -1,0 +1,104 @@
+package gpp.java
+
+import (
+    "sync"
+    "sync/atomic"
+)
+
+var defaultAssertionStatus atomic.Bool
+var classAssertionStatus sync.Map
+
+// SetDefaultAssertionStatus configures translated classes before their first use.
+func SetDefaultAssertionStatus(enabled bool) {
+    defaultAssertionStatus.Store(enabled)
+}
+
+// SetClassAssertionStatus overrides the default for the given Java binary name
+// before the translated class determines its assertion status.
+func SetClassAssertionStatus(className string, enabled bool) {
+    classAssertionStatus.Store(className, enabled)
+}
+
+// AssertionStatus holds the immutable snapshot for one translated class.
+type AssertionStatus struct {
+    frozen sync.Once
+    enabled bool
+}
+
+func (status *AssertionStatus) Enabled(className string) bool {
+    status.frozen.Do(func() {
+        if override, found := classAssertionStatus.Load(className); found {
+            status.enabled = override.(bool)
+        } else {
+            status.enabled = defaultAssertionStatus.Load()
+        }
+    })
+    return status.enabled
+}
+
+// Error identifies java.lang.Error and its subclasses.
+type Error interface {
+    Throwable
+    JavaError()
+}
+
+type AssertionError struct {
+    message *String
+    cause Throwable
+    suppressed suppressedErrors
+}
+
+func NewAssertionError() *AssertionError {
+    return &AssertionError{}
+}
+
+func NewAssertionErrorWithCause(message *String, cause Throwable) *AssertionError {
+    return &AssertionError{message: message, cause: cause}
+}
+
+// NewAssertionErrorWithDetail performs the String conversion for assert x : y.
+func NewAssertionErrorWithDetail(detail any) *AssertionError {
+    if isNullReference(detail) {
+        return NewAssertionErrorWithCause(internString(StringFromGo("null")), nil)
+    }
+    switch value := detail.(type) {
+    case *String:
+        return NewAssertionErrorWithCause(value, nil)
+    case Throwable:
+        name := value.JavaClassName()
+        if message := ThrowableMessage(value); message != nil {
+            prefix := StringFromGo(name + ": ")
+            return NewAssertionErrorWithCause(ConcatStringValue(prefix, message), value)
+        }
+        return NewAssertionErrorWithCause(StringFromGo(name), value)
+    case interface{ ToString() *String }:
+        return NewAssertionErrorWithCause(value.ToString(), nil)
+    default:
+        return NewAssertionErrorWithCause(&String{encoded: stringConversion(value)}, nil)
+    }
+}
+
+func (failure *AssertionError) Error() string {
+    if text, ok := failure.message.ToGo(); ok {
+        return text
+    }
+    return failure.JavaClassName()
+}
+
+func (*AssertionError) JavaClassName() string { return "java.lang.AssertionError" }
+func (*AssertionError) JavaError() {}
+func (failure *AssertionError) GetMessage() *String { return failure.message }
+func (failure *AssertionError) GetCause() Throwable { return failure.cause }
+
+// ThrowableMessage reads the modeled Java message without wrapping the error.
+func ThrowableMessage(failure Throwable) *String {
+    RequireNonNull(failure)
+    if getter, ok := failure.(interface{ GetMessage() *String }); ok {
+        return getter.GetMessage()
+    }
+    text := failure.Error()
+    if text == "" || text == failure.JavaClassName() {
+        return nil
+    }
+    return StringFromGo(text)
+}

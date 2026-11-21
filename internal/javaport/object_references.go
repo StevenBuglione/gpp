@@ -128,7 +128,8 @@ func (program *javaObjectProgram) canConvertReference(source, target string) boo
 	}
 	sourceGoType := javaCatchTypes[source]
 	return sourceGoType != "" && (target == "java.lang.Throwable" ||
-		(target == "java.lang.Exception" && strings.HasPrefix(sourceGoType, "*")))
+		(target == javaErrorType && source == javaAssertionError) ||
+		(target == "java.lang.Exception" && source != javaAssertionError && strings.HasPrefix(sourceGoType, "*")))
 }
 
 func (ctx javaObjectContext) convertReference(value, source, target string) (string, error) {
