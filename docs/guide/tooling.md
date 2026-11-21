@@ -139,10 +139,27 @@ saturation and NaN rules through the bundled `gpp/java` package.
 
 For public classes with primitive, Java `String`, or supported class reference
 types in fields and method signatures, the emitter
-also supports same-package single inheritance, constructor chains, instance
+also supports single inheritance, constructor chains, instance
 initialization and virtual calls during construction. It emits Go constructors
 such as `NewChild()` and `NewChildWithInt(int32)`. Go callers can use exported
 methods directly or request an ancestor view such as `child.GppAsBase()`.
+
+Pass `--out-dir` to translate related Java packages together. The destination
+must be a new directory. The importer places each compilation unit at
+`<output>/<java/package/path>/translated.gpp` and generates GPP logical
+imports such as `import foundation org.example.foundation`. Compile all the
+output with one Go module path to make the original package hierarchy
+available to Go consumers.
+
+```bash
+gpp migrate java --emit-gpp --out-dir translated --release 17 src/main/java
+gpp compile -module example.com/migrated -output generated translated
+```
+
+Batch translation supports acyclic dependencies between supported classes,
+including cross-package inheritance and public instance calls. It reports
+cycles in generated Go imports and identifies their member packages. Java
+module descriptors still require separate handling.
 
 Translated methods and constructors can use Java `throw`, typed `catch`,
 multi-catch, and `finally` with the exception classes provided by `gpp/java`.

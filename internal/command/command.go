@@ -194,7 +194,7 @@ func commandHelp(name string) int {
 		fmt.Println("Usage: gpp lsp [--log[=path]]")
 	case "migrate":
 		fmt.Println("Usage: gpp migrate java --analyze [options] <file.java|directory> ...")
-		fmt.Println("       gpp migrate java --emit-gpp [options] <file.java> ...")
+		fmt.Println("       gpp migrate java --emit-gpp [options] <file.java|directory> ...")
 		fmt.Println("       gpp migrate java --analyze [--java path] --inputs manifest.json")
 		fmt.Println("  --release version    Java source version (default: 17)")
 		fmt.Println("  --encoding name      Java source encoding (default: UTF-8)")
@@ -202,6 +202,7 @@ func commandHelp(name string) int {
 		fmt.Println("  --module-path paths  Java compiler module path")
 		fmt.Println("  --enable-preview     enable previews matching the JDK and release")
 		fmt.Println("  --java path          launcher from a JDK (default: java on PATH)")
+		fmt.Println("  --out-dir path       write one GPP file per package to a new directory")
 	default:
 		fatalf("unknown command %q; run `gpp --help` for usage", name)
 		return 2

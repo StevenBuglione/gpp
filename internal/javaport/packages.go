@@ -28,7 +28,10 @@ func packageCycles(files []SourceFile) [][]PackageIdentity {
 			}
 		}
 	}
+	return findPackageCycles(edges)
+}
 
+func findPackageCycles(edges map[PackageIdentity]map[PackageIdentity]bool) [][]PackageIdentity {
 	indices := map[PackageIdentity]int{}
 	lowLinks := map[PackageIdentity]int{}
 	onStack := map[PackageIdentity]bool{}

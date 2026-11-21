@@ -19,7 +19,6 @@ func (ctx javaObjectContext) emitVariable(out *strings.Builder, variable JavaVar
 	if goType == "" {
 		return fmt.Errorf("unsupported Java local type %s", variable.Type)
 	}
-	ctx.program.useRuntimeType(variable.Type)
 	fmt.Fprintf(out, "\tvar %s %s", name, goType)
 	if variable.Initializer != nil {
 		value, err := ctx.converted(variable.Initializer, variable.Type)
@@ -44,7 +43,7 @@ func (ctx javaObjectContext) allocateObject(expression *JavaExpression) (string,
 	if err != nil {
 		return "", err
 	}
-	return constructor.allocatorName() + "(" + args + ")", nil
+	return ctx.program.qualify(constructor.class.file.Package, constructor.allocatorName()) + "(" + args + ")", nil
 }
 
 func (ctx javaObjectContext) invokeReference(expression *JavaExpression, method *javaObjectMethod) (string, error) {
@@ -79,7 +78,7 @@ func (ctx javaObjectContext) invokeReference(expression *JavaExpression, method 
 }
 
 func (program *javaObjectProgram) referenceType(name string) bool {
-	return program.objectGoType(name) != "" && primitiveTypes[name] == ""
+	return program.mappedObjectType(name) != "" && primitiveTypes[name] == ""
 }
 
 func (program *javaObjectProgram) canConvertReference(source, target string) bool {
@@ -108,11 +107,11 @@ func (ctx javaObjectContext) convertReference(value, source, target string) (str
 	if !ctx.program.canConvertReference(source, target) {
 		return "", fmt.Errorf("unsupported Java reference conversion from %s to %s", source, target)
 	}
-	ctx.program.useRuntimeType(target)
 	if source == "null" {
 		return "(" + ctx.program.objectGoType(target) + ")(" + value + ")", nil
 	}
 	if target == javaAutoCloseable {
+		ctx.program.runtime = true
 		return "javart.AsAutoCloseable(" + value + ")", nil
 	}
 	if ancestor := ctx.program.classes[target]; ancestor != nil && source != target {

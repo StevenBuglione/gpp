@@ -35,6 +35,7 @@ func runMigrate(args []string) int {
 	analyze := flags.Bool("analyze", false, "emit resolved symbols, calls, and diagnostics as JSON")
 	manifest := flags.String("inputs", "", "Java build inputs manifest")
 	emit := flags.Bool("emit-gpp", false, "emit GPP for supported Java source")
+	output := flags.String("out-dir", "", "write one GPP compilation unit per Java package")
 	if err := flags.Parse(args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -43,6 +44,10 @@ func runMigrate(args []string) int {
 	}
 	if *analyze == *emit {
 		fatalf("select exactly one of --analyze and --emit-gpp")
+		return 2
+	}
+	if *output != "" && !*emit {
+		fatalf("--out-dir requires --emit-gpp")
 		return 2
 	}
 	sources := flags.Args()
@@ -78,6 +83,16 @@ func runMigrate(args []string) int {
 		return reportError(err)
 	}
 	if *emit {
+		if *output != "" {
+			packages, err := javaport.EmitGPPPackages(report)
+			if err != nil {
+				return reportError(err)
+			}
+			if err := writeJavaPackages(*output, packages); err != nil {
+				return reportError(err)
+			}
+			return 0
+		}
 		source, err := javaport.EmitGPP(report)
 		if err != nil {
 			return reportError(err)
@@ -98,4 +113,41 @@ func runMigrate(args []string) int {
 		}
 	}
 	return 0
+}
+
+func writeJavaPackages(destination string, packages []javaport.EmittedPackage) error {
+	destination, err := filepath.Abs(destination)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Lstat(destination); err == nil {
+		return fmt.Errorf("Java output directory already exists: %s", destination)
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	parent := filepath.Dir(destination)
+	if err := os.MkdirAll(parent, 0755); err != nil {
+		return err
+	}
+	staging, err := os.MkdirTemp(parent, ".gpp-java-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(staging)
+	for _, pkg := range packages {
+		directory := filepath.Join(staging, filepath.FromSlash(strings.ReplaceAll(pkg.Name, ".", "/")))
+		if err := os.MkdirAll(directory, 0755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(directory, "translated.gpp"), []byte(pkg.Source), 0644); err != nil {
+			return err
+		}
+	}
+	if err := os.Chmod(staging, 0755); err != nil {
+		return err
+	}
+	if err := os.Rename(staging, destination); err != nil {
+		return fmt.Errorf("publish generated Java packages: %w", err)
+	}
+	return nil
 }

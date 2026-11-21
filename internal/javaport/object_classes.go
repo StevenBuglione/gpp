@@ -8,27 +8,29 @@ import (
 )
 
 type javaObjectClass struct {
-	file         SourceFile
-	declaration  Occurrence
-	parent       *javaObjectClass
-	fields       []Occurrence
-	initializers []Occurrence
-	constructors []*javaObjectMethod
-	methods      []*javaObjectMethod
-	virtual      map[string]*javaObjectMethod
-	embed        bool
-	checksErrors bool
-	closeable    bool
+	file                   SourceFile
+	declaration            Occurrence
+	parent                 *javaObjectClass
+	fields                 []Occurrence
+	initializers           []Occurrence
+	constructors           []*javaObjectMethod
+	methods                []*javaObjectMethod
+	virtual                map[string]*javaObjectMethod
+	embed                  bool
+	checksErrors           bool
+	closeable              bool
+	crossPackageDescendant bool
 }
 
 type javaObjectMethod struct {
-	declaration Occurrence
-	class       *javaObjectClass
-	goName      string
-	internal    string
-	public      bool
-	slot        *javaObjectMethod
-	overridden  bool
+	declaration      Occurrence
+	class            *javaObjectClass
+	goName           string
+	internal         string
+	public           bool
+	slot             *javaObjectMethod
+	overridden       bool
+	crossPackageInit bool
 }
 
 type javaObjectField struct {
@@ -42,7 +44,9 @@ type javaObjectProgram struct {
 	fields  map[string]javaObjectField
 	layout  []*javaObjectClass
 	pending map[string]bool
-	exports map[string]bool
+	exports map[string]map[string]bool
+	pkg     string
+	imports map[string]string
 	runtime bool
 }
 
@@ -51,14 +55,26 @@ func emitJavaObjects(report Report) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	program := javaObjectProgram{
+	program, err := prepareJavaObjects(report.Files)
+	if err != nil {
+		return "", err
+	}
+	unit, err := program.emitPackage(packageName)
+	return unit.Source, err
+}
+
+func prepareJavaObjects(files []SourceFile) (*javaObjectProgram, error) {
+	program := &javaObjectProgram{
 		classes: map[string]*javaObjectClass{}, methods: map[string]*javaObjectMethod{},
-		fields: map[string]javaObjectField{}, pending: map[string]bool{}, exports: map[string]bool{},
+		fields: map[string]javaObjectField{}, pending: map[string]bool{}, exports: map[string]map[string]bool{},
 	}
 	var classes []*javaObjectClass
-	for _, file := range report.Files {
+	for _, file := range files {
 		if file.Module != nil || len(file.Declarations) == 0 {
-			return "", fmt.Errorf("%s: object emission requires a Java source file with classes", file.Path)
+			return nil, fmt.Errorf("%s: object emission requires a Java source file with classes", file.Path)
+		}
+		if program.exports[file.Package] == nil {
+			program.exports[file.Package] = map[string]bool{}
 		}
 		for _, declaration := range file.Declarations {
 			if declaration.Owner != "" || declaration.Kind != "CLASS" {
@@ -67,18 +83,18 @@ func emitJavaObjects(report Report) (string, error) {
 			if !token.IsExported(declaration.Name) || !token.IsIdentifier(declaration.Name) ||
 				!hasOnlyModifiers(declaration, "PUBLIC", "FINAL") || !slices.Contains(declaration.Modifiers, "PUBLIC") ||
 				!onlySourceAnnotations(declaration) || declaration.HasTypeParams {
-				return "", unsupportedSource(file, declaration, "expected a public non-generic class with at most one superclass")
+				return nil, unsupportedSource(file, declaration, "expected a public non-generic class with at most one superclass")
 			}
-			if program.exports[declaration.Name] {
-				return "", unsupportedSource(file, declaration, "duplicate Go class name")
+			if program.exports[file.Package][declaration.Name] {
+				return nil, unsupportedSource(file, declaration, "duplicate Go class name")
 			}
 			class := &javaObjectClass{file: file, declaration: declaration}
 			classes = append(classes, class)
 			program.classes[declaration.Symbol] = class
-			program.exports[declaration.Name] = true
+			program.exports[file.Package][declaration.Name] = true
 		}
 	}
-	for _, file := range report.Files {
+	for _, file := range files {
 		for _, declaration := range file.Declarations {
 			if declaration.Kind == "CLASS" && declaration.Owner == "" {
 				continue
@@ -89,32 +105,55 @@ func emitJavaObjects(report Report) (string, error) {
 			}
 			class, ok := program.classes[owner]
 			if !ok || !onlySourceAnnotations(declaration) {
-				return "", unsupportedSource(file, declaration, "nested, annotated, or non-class declaration")
+				return nil, unsupportedSource(file, declaration, "nested, annotated, or non-class declaration")
 			}
 			if err := program.addMember(class, declaration); err != nil {
-				return "", unsupportedSource(file, declaration, err.Error())
+				return nil, unsupportedSource(file, declaration, err.Error())
 			}
 		}
 	}
 	for _, class := range classes {
 		if err := program.layoutClass(class); err != nil {
-			return "", err
+			return nil, err
 		}
 	}
-	var source strings.Builder
 	for _, class := range program.layout {
-		if err := program.emitClass(&source, class); err != nil {
-			return "", err
+		for ancestor := class.parent; ancestor != nil; ancestor = ancestor.parent {
+			if ancestor.file.Package != class.file.Package {
+				ancestor.crossPackageDescendant = true
+			}
+		}
+		for _, constructor := range class.constructors {
+			call := constructor.declaration.ConstructorCall
+			if call == nil || call.Receiver != "super" {
+				continue
+			}
+			if target := program.methods[call.Symbol]; target != nil && target.class.file.Package != class.file.Package {
+				target.crossPackageInit = true
+			}
 		}
 	}
-	imports := ""
-	if program.runtime {
-		if packageName == "gpp.java" {
-			return "", fmt.Errorf("Java runtime import conflicts with source package %q", packageName)
+	for _, class := range program.layout {
+		for owner := class; owner != nil; owner = owner.parent {
+			for _, constructor := range owner.constructors {
+				if constructor.crossPackageInit && class.virtual[constructor.bridgeName("Init")] != nil {
+					return nil, unsupportedSource(class.file, class.declaration, "Go method collides with "+constructor.bridgeName("Init"))
+				}
+			}
+			if !owner.crossPackageDescendant {
+				continue
+			}
+			for _, method := range owner.methods {
+				if method.overridden && class.virtual[method.bridgeName("Dispatch")] != nil {
+					return nil, unsupportedSource(class.file, class.declaration, "Go method collides with "+method.bridgeName("Dispatch"))
+				}
+				if method.public && (method.slot != method || method.overridden) && class.virtual[method.bridgeName("Body")] != nil {
+					return nil, unsupportedSource(class.file, class.declaration, "Go method collides with "+method.bridgeName("Body"))
+				}
+			}
 		}
-		imports = "\nimport javart \"gpp/java\"\n"
 	}
-	return "package " + packageName + "\n" + imports + source.String(), nil
+	return program, nil
 }
 
 func (program *javaObjectProgram) addMember(class *javaObjectClass, declaration Occurrence) error {
@@ -125,7 +164,7 @@ func (program *javaObjectProgram) addMember(class *javaObjectClass, declaration 
 		}
 		class.initializers = append(class.initializers, declaration)
 	case "VARIABLE":
-		if program.objectGoType(declaration.Type) == "" || !token.IsIdentifier(declaration.Name) {
+		if program.mappedObjectType(declaration.Type) == "" || !token.IsIdentifier(declaration.Name) {
 			return fmt.Errorf("unsupported field name or type %s", declaration.Type)
 		}
 		if slices.Contains(declaration.Modifiers, "STATIC") {
@@ -134,10 +173,11 @@ func (program *javaObjectProgram) addMember(class *javaObjectClass, declaration 
 			}
 			if slices.Contains(declaration.Modifiers, "PUBLIC") {
 				name := class.declaration.Name + declaration.Name
-				if program.exports[name] {
+				exports := program.exports[class.file.Package]
+				if exports[name] {
 					return fmt.Errorf("duplicate exported Go constant %s", name)
 				}
-				program.exports[name] = true
+				exports[name] = true
 			}
 		} else {
 			if !hasOnlyModifiers(declaration, "PRIVATE", "PROTECTED", "FINAL") {
@@ -146,7 +186,6 @@ func (program *javaObjectProgram) addMember(class *javaObjectClass, declaration 
 			if declaration.Initializer != nil {
 				class.initializers = append(class.initializers, declaration)
 			}
-			program.useRuntimeType(declaration.Type)
 		}
 		class.fields = append(class.fields, declaration)
 		program.fields[declaration.Symbol] = javaObjectField{declaration, class}
@@ -164,10 +203,9 @@ func (program *javaObjectProgram) addMethod(class *javaObjectClass, declaration 
 		return fmt.Errorf("unsupported constructor or method modifiers, body, or type parameters")
 	}
 	for _, parameter := range declaration.Parameters {
-		if program.objectGoType(parameter.Type) == "" {
+		if program.mappedObjectType(parameter.Type) == "" {
 			return fmt.Errorf("unsupported parameter type %s", parameter.Type)
 		}
-		program.useRuntimeType(parameter.Type)
 	}
 	method := &javaObjectMethod{declaration: declaration, class: class, public: slices.Contains(declaration.Modifiers, "PUBLIC")}
 	if declaration.Name == "<init>" {
@@ -180,16 +218,17 @@ func (program *javaObjectProgram) addMethod(class *javaObjectClass, declaration 
 			}
 		}
 		if method.public {
-			if program.exports[method.goName] {
+			exports := program.exports[class.file.Package]
+			if exports[method.goName] {
 				return fmt.Errorf("duplicate exported Go constructor %s", method.goName)
 			}
-			program.exports[method.goName] = true
+			exports[method.goName] = true
 			if method.hasErrorAdapter() {
 				name := method.errorAdapterName()
-				if program.exports[name] {
+				if exports[name] {
 					return fmt.Errorf("duplicate Go constructor error adapter %s", name)
 				}
-				program.exports[name] = true
+				exports[name] = true
 			}
 		}
 		class.constructors = append(class.constructors, method)
@@ -197,10 +236,9 @@ func (program *javaObjectProgram) addMethod(class *javaObjectClass, declaration 
 		if !method.public && !slices.Contains(declaration.Modifiers, "PRIVATE") {
 			return fmt.Errorf("package-private or protected methods require additional dispatch support")
 		}
-		if declaration.Result != "void" && program.objectGoType(declaration.Result) == "" {
+		if declaration.Result != "void" && program.mappedObjectType(declaration.Result) == "" {
 			return fmt.Errorf("unsupported method result type %s", declaration.Result)
 		}
-		program.useRuntimeType(declaration.Result)
 		method.goName = exportMethodName(declaration.Name)
 		method.internal = "javaBody" + declaration.Name
 		if !token.IsIdentifier(method.goName) || !token.IsExported(method.goName) {
@@ -243,7 +281,9 @@ func (program *javaObjectProgram) layoutClass(class *javaObjectClass) error {
 		if err := program.layoutClass(class.parent); err != nil {
 			return err
 		}
-		class.parent.embed = true
+		if class.parent.file.Package == class.file.Package {
+			class.parent.embed = true
+		}
 		class.closeable = class.closeable || class.parent.closeable
 	}
 	class.virtual = map[string]*javaObjectMethod{}
@@ -269,10 +309,13 @@ func (program *javaObjectProgram) layoutClass(class *javaObjectClass) error {
 	if class.closeable && class.virtual["GppAutoCloseable"] != nil {
 		return unsupportedSource(class.file, declaration, "Go AutoCloseable marker collides with method GppAutoCloseable")
 	}
+	views := map[string]bool{}
 	for ancestor := class.parent; ancestor != nil; ancestor = ancestor.parent {
-		if method := class.virtual[objectViewName(ancestor)]; method != nil {
-			return unsupportedSource(class.file, declaration, "Go ancestor view collides with method "+method.goName)
+		view := objectViewName(ancestor)
+		if views[view] || class.virtual[view] != nil {
+			return unsupportedSource(class.file, declaration, "colliding Go ancestor view "+view)
 		}
+		views[view] = true
 	}
 	for owner := class; owner != nil; owner = owner.parent {
 		for _, method := range owner.methods {
@@ -337,6 +380,17 @@ func objectViewName(class *javaObjectClass) string {
 	return "GppAs" + class.declaration.Name
 }
 
+func (class *javaObjectClass) baseField() string {
+	if class.file.Package != class.parent.file.Package {
+		return "javaImportedBase" + class.declaration.Name
+	}
+	return "javaBase" + class.parent.declaration.Name
+}
+
+func (method *javaObjectMethod) bridgeName(operation string) string {
+	return "GppJava" + operation + "_" + method.class.declaration.Name + "_" + method.internal
+}
+
 func (method *javaObjectMethod) hasErrorAdapter() bool {
 	return method.public && len(method.declaration.Thrown) != 0
 }
@@ -349,10 +403,13 @@ func (method *javaObjectMethod) errorAdapterName() string {
 }
 
 func (class *javaObjectClass) memberReceiver(owner *javaObjectClass) (string, bool) {
-	receiver := "this"
-	for class != owner && class.parent != nil {
-		class = class.parent
-		receiver += ".javaBase" + class.declaration.Name
+	if class == owner {
+		return "this", true
 	}
-	return receiver, class == owner
+	for ancestor := class.parent; ancestor != nil; ancestor = ancestor.parent {
+		if ancestor == owner {
+			return "this." + objectViewName(owner) + "()", true
+		}
+	}
+	return "", false
 }

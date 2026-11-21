@@ -11,6 +11,10 @@ import (
 
 func (program *javaObjectProgram) emitClass(out *strings.Builder, class *javaObjectClass) error {
 	name := class.declaration.Name
+	if class.parent != nil && class.parent.file.Package != class.file.Package {
+		fmt.Fprintf(out, "\ntype %s = %s\n", class.baseField(),
+			program.qualify(class.parent.file.Package, class.parent.declaration.Name))
+	}
 	for _, field := range class.fields {
 		if !slices.Contains(field.Modifiers, "STATIC") || !slices.Contains(field.Modifiers, "PUBLIC") {
 			continue
@@ -31,7 +35,7 @@ func (program *javaObjectProgram) emitClass(out *strings.Builder, class *javaObj
 	}
 	fmt.Fprintf(out, "\ntype %s struct {\n", name)
 	if class.parent != nil {
-		fmt.Fprintf(out, "\tjavaBase%s\n", class.parent.declaration.Name)
+		fmt.Fprintf(out, "\t%s\n", class.baseField())
 	} else {
 		// Empty Go structs can share an address. Java allocations must be distinct.
 		out.WriteString("\t_ byte\n")
@@ -55,9 +59,12 @@ func (program *javaObjectProgram) emitClass(out *strings.Builder, class *javaObj
 		fmt.Fprintf(out, "\ntype javaBase%s = %s\n", name, name)
 	}
 	for ancestor := class.parent; ancestor != nil; ancestor = ancestor.parent {
-		receiver, _ := class.memberReceiver(ancestor)
-		fmt.Fprintf(out, "\nfunc (this *%s) %s() *%s {\n\tif this == nil { return nil }\n\treturn &%s\n}\n",
-			name, objectViewName(ancestor), ancestor.declaration.Name, receiver)
+		view := "&this." + class.baseField()
+		if ancestor != class.parent {
+			view = "this." + class.baseField() + "." + objectViewName(ancestor) + "()"
+		}
+		fmt.Fprintf(out, "\nfunc (this *%s) %s() %s {\n\tif this == nil { return nil }\n\treturn %s\n}\n",
+			name, objectViewName(ancestor), program.objectGoType(ancestor.declaration.Symbol), view)
 	}
 
 	ctx := javaObjectContext{program: program, class: class}
@@ -122,11 +129,23 @@ func (ctx javaObjectContext) emitConstructor(out *strings.Builder, method *javaO
 		}
 		receiver, _ := ctx.class.memberReceiver(slot.class)
 		owner, _ := ctx.class.memberReceiver(implementation.class)
-		fmt.Fprintf(out, "\t%s.javaDispatch%s = %s.%s\n", receiver, slot.goName, owner, implementation.internal)
+		bodyName := implementation.internal
+		if implementation.class.file.Package != ctx.class.file.Package {
+			bodyName = implementation.bridgeName("Body")
+		}
+		if slot.class.file.Package != ctx.class.file.Package {
+			fmt.Fprintf(out, "\t%s.%s(%s.%s)\n", receiver, slot.bridgeName("Dispatch"), owner, bodyName)
+		} else {
+			fmt.Fprintf(out, "\t%s.javaDispatch%s = %s.%s\n", receiver, slot.goName, owner, bodyName)
+		}
 	}
 	fmt.Fprintf(out, "\tthis.%s(%s)\n\treturn this\n}\n", method.internal, arguments)
 	if method.hasErrorAdapter() {
 		ctx.emitErrorAdapter(out, "", method.errorAdapterName(), parameters, "*"+name, method.goName+"("+arguments+")")
+	}
+	if method.crossPackageInit {
+		fmt.Fprintf(out, "\nfunc (this *%s) %s(%s) { this.%s(%s) }\n", name,
+			method.bridgeName("Init"), parameters, method.internal, arguments)
 	}
 	call := declaration.ConstructorCall
 	if call == nil || (call.Receiver != "this" && call.Receiver != "super") {
@@ -150,7 +169,11 @@ func (ctx javaObjectContext) emitConstructor(out *strings.Builder, method *javaO
 			return err
 		}
 		receiver, _ := ctx.class.memberReceiver(callee.class)
-		fmt.Fprintf(out, "\t%s.%s(%s)\n", receiver, callee.internal, values)
+		calleeName := callee.internal
+		if callee.class.file.Package != ctx.class.file.Package {
+			calleeName = callee.bridgeName("Init")
+		}
+		fmt.Fprintf(out, "\t%s.%s(%s)\n", receiver, calleeName, values)
 	}
 	if call.Receiver == "super" && len(ctx.class.initializers) > 0 {
 		out.WriteString("\tthis.javaInitFields()\n")
@@ -188,6 +211,18 @@ func (ctx javaObjectContext) emitMethod(out *strings.Builder, method *javaObject
 		out.WriteString("\tpanic(\"Java method completed without a result\")\n")
 	}
 	out.WriteString("}\n")
+	if ctx.class.crossPackageDescendant && method.public && bodyName != method.goName {
+		returnKeyword := ""
+		if result != "" {
+			returnKeyword = "return "
+		}
+		fmt.Fprintf(out, "\nfunc (this *%s) %s(%s)%s { %sthis.%s(%s) }\n",
+			name, method.bridgeName("Body"), parameters, result, returnKeyword, bodyName, arguments)
+	}
+	if ctx.class.crossPackageDescendant && method.overridden {
+		fmt.Fprintf(out, "\nfunc (this *%s) %s(dispatch func(%s)%s) { this.javaDispatch%s = dispatch }\n",
+			name, method.bridgeName("Dispatch"), parameters, result, method.goName)
+	}
 	if method.overridden {
 		fmt.Fprintf(out, "\nfunc (this *%s) %s(%s)%s {\n", name, method.goName, parameters, result)
 		fmt.Fprintf(out, "\tif dispatch := this.javaDispatch%s; dispatch != nil {\n", method.goName)
@@ -378,6 +413,9 @@ func (ctx javaObjectContext) field(expression *JavaExpression) (string, error) {
 	if !found || expression.Static || (expression.Receiver != "this" && expression.Receiver != "super") {
 		return "", fmt.Errorf("unsupported field access %s", expression.Symbol)
 	}
+	if field.class.file.Package != ctx.class.file.Package {
+		return "", fmt.Errorf("cross-package field access requires a Java access bridge for %s", expression.Symbol)
+	}
 	receiver, found := ctx.class.memberReceiver(field.class)
 	if !found {
 		return "", fmt.Errorf("field %s is outside the current class hierarchy", expression.Symbol)
@@ -417,6 +455,8 @@ func (ctx javaObjectContext) invoke(expression *JavaExpression) (string, error) 
 			owner, name = callee.slot.class, callee.goName
 		} else if callee.slot == callee && !callee.overridden {
 			name = callee.goName
+		} else if callee.class.file.Package != ctx.class.file.Package {
+			name = callee.bridgeName("Body")
 		}
 	}
 	receiver, found := ctx.class.memberReceiver(owner)

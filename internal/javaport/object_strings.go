@@ -10,6 +10,15 @@ import (
 const javaStringType = "java.lang.String"
 
 func (program *javaObjectProgram) objectGoType(javaType string) string {
+	if class := program.classes[javaType]; class != nil {
+		return "*" + program.qualify(class.file.Package, class.declaration.Name)
+	}
+	goType := program.mappedObjectType(javaType)
+	program.runtime = program.runtime || strings.Contains(goType, "javart.")
+	return goType
+}
+
+func (program *javaObjectProgram) mappedObjectType(javaType string) string {
 	if javaType == javaStringType {
 		return "*javart.String"
 	}
@@ -26,10 +35,6 @@ func (program *javaObjectProgram) objectGoType(javaType string) string {
 		return goType
 	}
 	return primitiveTypes[javaType]
-}
-
-func (program *javaObjectProgram) useRuntimeType(javaType string) {
-	program.runtime = program.runtime || strings.Contains(program.objectGoType(javaType), "javart.")
 }
 
 func (program *javaObjectProgram) stringLiteral(encoded *string) (string, error) {

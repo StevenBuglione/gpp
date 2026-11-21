@@ -1775,8 +1775,8 @@ func tokenImportNode(name *ast.Ident, importPath string, logical bool, startToke
 }
 
 // sourceImportSpec accepts regular Go import specs and GPP logical imports
-// such as `import foo.bar`. Logical imports are normalized to a quoted path
-// for semantic analysis and later lowered to the module's generated path.
+// such as `import foo.bar` and `import alias foo.bar`. Logical imports become
+// quoted paths during analysis and are lowered to the module's generated path.
 func sourceImportSpec(tokens []Token, index int) (*ast.Ident, string, int, bool, bool) {
 	name, pathIndex, next, ok := importTokenSpec(tokens, index)
 	if ok {
@@ -1790,6 +1790,11 @@ func sourceImportSpec(tokens []Token, index int) (*ast.Ident, string, int, bool,
 	index = nextSignificantToken(tokens, index)
 	if index >= len(tokens) || tokens[index].Kind != TokenIdentifier {
 		return nil, "", index, false, false
+	}
+	if next := nextSignificantToken(tokens, index+1); next < len(tokens) &&
+		tokens[next].Span.Line == tokens[index].Span.Line && tokens[next].Kind == TokenIdentifier {
+		name = &ast.Ident{Name: tokens[index].Text}
+		index = next
 	}
 	parts := []string{tokens[index].Text}
 	index++
@@ -1806,7 +1811,10 @@ func sourceImportSpec(tokens []Token, index int) (*ast.Ident, string, int, bool,
 		index = part + 1
 	}
 	logical := strings.Join(parts, ".")
-	return &ast.Ident{Name: parts[len(parts)-1]}, logical, index, true, true
+	if name == nil {
+		name = &ast.Ident{Name: parts[len(parts)-1]}
+	}
+	return name, logical, index, true, true
 }
 
 func newImportSpec(name *ast.Ident, importPath string) *ast.ImportSpec {
