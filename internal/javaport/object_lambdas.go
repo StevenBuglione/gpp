@@ -158,27 +158,45 @@ func (ctx javaObjectContext) lambda(expression *JavaExpression) (string, error) 
 	ctx.program.lambdaNext++
 	child := ctx.lambdaScope(id)
 	parameters := make([]string, 0, len(expression.Parameters))
+	var setup strings.Builder
 	for index, parameter := range expression.Parameters {
-		javaType := declaration.Parameters[index].Type
-		if parameter.Type != javaType {
-			return "", fmt.Errorf("unsupported Java lambda parameter conversion from %s to %s", javaType, parameter.Type)
-		}
+		erased := declaration.Parameters[index].Type
 		name := fmt.Sprintf("javaLambdaArgument%d_%d", id, index)
 		child.arguments[parameter.Name] = name
-		parameters = append(parameters, name+" "+ctx.program.objectGoType(javaType))
+		formal := name
+		if parameter.Type != erased {
+			formal += "Erased"
+			value, err := child.adaptErasedRead(formal, erased, parameter.Type)
+			if err != nil {
+				return "", err
+			}
+			// A raw call checks the instantiated argument before entering
+			// the lambda's Java body, including its exception handlers.
+			fmt.Fprintf(&setup, "\t%s := %s\n\t_ = %s\n", name, value, name)
+		}
+		parameters = append(parameters, formal+" "+ctx.program.objectGoType(erased))
 	}
-	result := ctx.program.interfaceResult(declaration)
+	erasedResult := ctx.program.interfaceResult(declaration)
+	resultType, result := declaration.Result, erasedResult
+	if signature := expression.FunctionSignature; signature != nil && signature.Result != resultType {
+		resultType = signature.Result
+		goType := ctx.program.objectGoType(resultType)
+		if goType == "" || erasedResult == "" {
+			return "", fmt.Errorf("unsupported Java lambda result conversion from %s to %s", resultType, declaration.Result)
+		}
+		result = " " + goType
+	}
 	hasTry := expression.Body.containsTry() || expression.Operand.containsStatement(func(kind string) bool { return kind == "TRY" })
 	if hasTry && result != "" {
-		result = " (javaResult " + ctx.program.objectGoType(declaration.Result) + ")"
+		result = " (javaResult " + ctx.program.objectGoType(resultType) + ")"
 	}
 	var body strings.Builder
 	if hasTry {
-		child.emitJavaReturnBoundary(&body, declaration.Result)
+		child.emitJavaReturnBoundary(&body, resultType)
 	}
 	switch {
 	case expression.Body != nil:
-		if err := child.emitStatements(&body, expression.Body, declaration.Result); err != nil {
+		if err := child.emitStatements(&body, expression.Body, resultType); err != nil {
 			return "", err
 		}
 		if result != "" && (hasTry || expression.Body.containsStatement(needsJavaControlFlowTerminal)) {
@@ -189,7 +207,7 @@ func (ctx javaObjectContext) lambda(expression *JavaExpression) (string, error) 
 		if result == "" {
 			value, err = child.expression(expression.Operand)
 		} else {
-			value, err = child.converted(expression.Operand, declaration.Result)
+			value, err = child.converted(expression.Operand, resultType)
 		}
 		if err != nil {
 			return "", err
@@ -198,7 +216,17 @@ func (ctx javaObjectContext) lambda(expression *JavaExpression) (string, error) 
 	default:
 		return "", fmt.Errorf("missing attributed Java lambda body")
 	}
-	return child.makeLambda(adapter, strings.Join(parameters, ", "), result, &body), nil
+	if resultType == declaration.Result {
+		setup.WriteString(body.String())
+	} else {
+		value, err := ctx.convertValue("javaLambdaResult", resultType, declaration.Result)
+		if err != nil {
+			return "", err
+		}
+		fmt.Fprintf(&setup, "\tjavaLambdaResult := func()%s {\n%s\t}()\n\treturn %s\n", result, body.String(), value)
+		result = erasedResult
+	}
+	return child.makeLambda(adapter, strings.Join(parameters, ", "), result, &setup), nil
 }
 
 func (ctx javaObjectContext) makeLambda(adapter *javaLambdaAdapter, parameters, result string, body *strings.Builder) string {

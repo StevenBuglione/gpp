@@ -19,6 +19,8 @@ public interface Carrier<T> {
     void set(T value);
     default T echo(T value) { return value; }
 }`},
+		{"Mapper", `package reference.generics.api;
+public interface Mapper<T, R> { R apply(T value); }`},
 		{"Box", `package reference.generics.model;
 import reference.generics.api.Carrier;
 public class Box<T> implements Carrier<T> {
@@ -46,6 +48,7 @@ public final class Tools {
 }`},
 		{"Calls", `package reference.generics.client;
 import reference.generics.api.Carrier;
+import reference.generics.api.Mapper;
 import reference.generics.model.Box;
 import reference.generics.model.Derived;
 import reference.generics.model.NumberBox;
@@ -83,6 +86,19 @@ public class Calls {
         catch (ClassCastException failure) { return score + 10; }
     }
     public int nullBody(Box<String> value) { return value.get() == null ? 1 : 0; }
+    public Mapper<String, Integer> mapper() {
+        return (var value) -> { try { return value.length(); }
+            catch (NullPointerException failure) { return -1; } };
+    }
+    public Mapper<String, Integer> methodMapper() { return String::length; }
+    public Mapper<String, String> genericMethodMapper() { return Tools::identity; }
+    public Mapper<String, Box<String>> constructorMapper() { return Box<String>::new; }
+    public int apply(Mapper<String, Integer> source) { return source.apply("abcd"); }
+    public int badMapper() {
+        Mapper raw = mapper();
+        try { raw.apply(2); return 0; }
+        catch (ClassCastException failure) { return 1; }
+    }
 }`},
 	}
 	var inputs []string
@@ -105,6 +121,9 @@ class Probe {
             " " + calls.bound(new NumberBox<>(8)) + " " + calls.mutate(number));
         System.out.println(calls.field(text, "next") + " " + text.value + " " + calls.array(calls.arrayBox())[0]);
         System.out.println(calls.polluted() + " " + calls.nullBody(new Box<>(null)));
+        System.out.println(calls.mapper().apply(null) + " " + calls.apply(calls.mapper()) + " " +
+            calls.apply(calls.methodMapper()) + " " + calls.genericMethodMapper().apply("kept") + " " +
+            calls.constructorMapper().apply("constructed").get() + " " + calls.badMapper());
     }
 }`)
 	classes := filepath.Join(root, "classes")
@@ -158,6 +177,12 @@ func (carrier *nativeCarrier) Set(value any) { carrier.value = value }
 func (*nativeCarrier) Echo(value any) any { return value }
 var _ api.Carrier = (*nativeCarrier)(nil)
 var _ api.Carrier = (*model.Box)(nil)
+type nativeMapper struct{}
+func (nativeMapper) Apply(value any) any {
+    size, _ := java.StringLength(value.(*java.String))
+    return java.BoxInteger(size)
+}
+var _ api.Mapper = nativeMapper{}
 
 func asText(value *java.String) string { result, _ := value.ToGo(); return result }
 
@@ -176,6 +201,10 @@ func main() {
     fmt.Println(asText(calls.Field(text, java.StringFromGo("next"))), asText(text.GppJavaGetField_Box_value().(*java.String)),
         asText(java.ArrayGet[*java.String](calls.Array(calls.ArrayBox()), 0)))
     fmt.Println(calls.Polluted(), calls.NullBody(model.NewBoxWithObject(nil)))
+    if calls.Apply(nativeMapper{}) != calls.Apply(calls.Mapper()) { panic("external generic Go callback differs") }
+    fmt.Println(java.UnboxInteger(calls.Mapper().Apply(nil).(*java.Integer)), calls.Apply(calls.Mapper()),
+        calls.Apply(calls.MethodMapper()), asText(calls.GenericMethodMapper().Apply(java.StringFromGo("kept")).(*java.String)),
+        asText(calls.ConstructorMapper().Apply(java.StringFromGo("constructed")).(*model.Box).Get().(*java.String)), calls.BadMapper())
 }
 `)
 	if got := runObjectTestCommand(t, external, "go", "run", "-buildvcs=false", "-mod=mod", "."); got != want {

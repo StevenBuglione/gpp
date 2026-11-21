@@ -10,11 +10,14 @@ func (ctx javaObjectContext) methodReference(expression *JavaExpression) (string
 	if err != nil {
 		return "", err
 	}
-	lambda := &JavaExpression{Kind: "LAMBDA_EXPRESSION", Type: expression.Type}
+	lambda := &JavaExpression{Kind: "LAMBDA_EXPRESSION", Type: expression.Type, FunctionSignature: expression.FunctionSignature}
 	invocation := &JavaExpression{Kind: "METHOD_INVOCATION", Symbol: expression.Symbol, Type: expression.Result,
 		InvocationParameters: expression.InvocationParameters}
 	for index, parameter := range adapter.method.declaration.Parameters {
 		parameter.Name = fmt.Sprintf("referenceOperand%d", index)
+		if function := expression.FunctionSignature; function != nil && len(function.Parameters) == len(adapter.method.declaration.Parameters) {
+			parameter.Type = function.Parameters[index]
+		}
 		lambda.Parameters = append(lambda.Parameters, parameter)
 		invocation.Arguments = append(invocation.Arguments, &JavaExpression{
 			Kind: "IDENTIFIER", Name: parameter.Name, Type: parameter.Type,

@@ -51,11 +51,12 @@ import com.sun.source.tree.UsesTree;
 import com.sun.source.tree.VariableTree;
 import com.sun.source.tree.WhileLoopTree;
 import com.sun.source.tree.YieldTree;
-import com.sun.source.util.JavacTask;
 import com.sun.source.util.TreePath;
 import com.sun.source.util.TreePathScanner;
 import com.sun.source.util.Trees;
+import com.sun.tools.javac.api.BasicJavacTask;
 import com.sun.tools.javac.code.Type;
+import com.sun.tools.javac.code.Types.FunctionDescriptorLookupError;
 import com.sun.tools.javac.tree.JCTree.JCMemberReference;
 import com.sun.tools.javac.tree.JCTree.JCNewClass;
 import java.lang.reflect.Method;
@@ -101,16 +102,18 @@ class JavaSourceAnalysis {
         final Trees trees;
         final Elements elements;
         final Types types;
+        final com.sun.tools.javac.code.Types functionalTypes;
         final boolean includeMethodBodies;
         final List<String> declarations = new ArrayList<>();
         final List<String> calls = new ArrayList<>();
         final TreeMap<String, String> typeReferences = new TreeMap<>();
 
-        Inventory(CompilationUnitTree unit, Trees trees, Elements elements, Types types, boolean includeMethodBodies) {
+        Inventory(CompilationUnitTree unit, Trees trees, BasicJavacTask task, boolean includeMethodBodies) {
             this.unit = unit;
             this.trees = trees;
-            this.elements = elements;
-            this.types = types;
+            this.elements = task.getElements();
+            this.types = task.getTypes();
+            this.functionalTypes = com.sun.tools.javac.code.Types.instance(task.getContext());
             this.includeMethodBodies = includeMethodBodies;
         }
 
@@ -585,6 +588,7 @@ class JavaSourceAnalysis {
                     attributes += ",\"target\":" + executableExpression(target);
                 }
             } else if (tree instanceof LambdaExpressionTree lambda) {
+                attributes += functionSignature(type);
                 attributes += ",\"parameters\":[" + lambda.getParameters().stream()
                     .map(parameter -> {
                         var parameterPath = new TreePath(path, parameter);
@@ -599,6 +603,7 @@ class JavaSourceAnalysis {
                     attributes += ",\"operand\":" + executableExpression(bodyPath);
                 }
             } else if (tree instanceof MemberReferenceTree reference) {
+                attributes += functionSignature(type);
                 var qualifier = reference.getQualifierExpression();
                 var qualifierPath = new TreePath(path, qualifier);
                 var qualifierType = trees.getTypeMirror(qualifierPath);
@@ -718,6 +723,23 @@ class JavaSourceAnalysis {
             }
             return ",\"invocationParameters\":[" + parameters.stream().map(JavaSourceAnalysis::quote)
                 .collect(Collectors.joining(",")) + "]";
+        }
+
+        private String functionSignature(TypeMirror type) {
+            if (!(type instanceof Type attributed) || type.getKind() == TypeKind.ERROR) {
+                return "";
+            }
+            try {
+                if (functionalTypes.findDescriptorType(attributed) instanceof ExecutableType function) {
+                    var parameters = function.getParameterTypes().stream().map(this::expressionType)
+                        .map(JavaSourceAnalysis::quote).collect(Collectors.joining(","));
+                    return ",\"functionSignature\":{\"parameters\":[" + parameters + "],\"result\":" +
+                        quote(expressionType(function.getReturnType())) + "}";
+                }
+            } catch (FunctionDescriptorLookupError unresolved) {
+                // javac already reports invalid or unresolved functional targets.
+            }
+            return "";
         }
 
         private String expressionType(TypeMirror type) {
@@ -1011,12 +1033,12 @@ class JavaSourceAnalysis {
         var files = new ArrayList<String>();
         try (var manager = compiler.getStandardFileManager(diagnostics, Locale.ROOT, encoding)) {
             var inputs = manager.getJavaFileObjectsFromPaths(sources);
-            var task = (JavacTask) compiler.getTask(null, manager, diagnostics, options, null, inputs);
+            var task = (BasicJavacTask) compiler.getTask(null, manager, diagnostics, options, null, inputs);
             var units = task.parse();
             task.analyze();
             var trees = Trees.instance(task);
             for (var unit : units) {
-                var inventory = new Inventory(unit, trees, task.getElements(), task.getTypes(), includeMethodBodies);
+                var inventory = new Inventory(unit, trees, task, includeMethodBodies);
                 inventory.scan(unit, null);
                 files.add("{" + "\"path\":" + quote(filePath(unit.getSourceFile())) +
                     ",\"package\":" + quote(unit.getPackageName() == null ? "" : unit.getPackageName().toString()) +
