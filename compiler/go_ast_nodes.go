@@ -1131,7 +1131,8 @@ func constructorExprNode(call *CallExpr, context constructorContext) (ExprNode, 
 	if len(constructorInitializers) == 0 {
 		return instance, true, nil
 	}
-	return constructorInitializationExpr(name, instance, constructorInitializers), true, nil
+	bindOwner := len(classParentNames(class)) != 0 && context.Introspection != nil && context.Introspection.Enabled
+	return constructorInitializationExpr(name, instance, constructorInitializers, bindOwner), true, nil
 }
 
 func constructorCallMayReturnError(call *CallExpr, target constructorTarget, context constructorContext) bool {
@@ -1423,7 +1424,7 @@ func initializerDelegationCall(initializer Method) *CallExpr {
 	return nil
 }
 
-func constructorInitializationExpr(typeName string, instance ExprNode, initializers []constructorInitializer) ExprNode {
+func constructorInitializationExpr(typeName string, instance ExprNode, initializers []constructorInitializer, bindOwner bool) ExprNode {
 	valueName := "__gpp_instance"
 	errName := "__gpp_initErr"
 	statements := []Stmt{&DeclarationStmt{
@@ -1431,12 +1432,18 @@ func constructorInitializationExpr(typeName string, instance ExprNode, initializ
 		Names:   []Token{{Text: valueName, Kind: TokenIdentifier}},
 		Values:  []ExprNode{instance},
 	}}
+	if bindOwner {
+		statements = append(statements, &ExpressionStmt{Expression: &CallExpr{
+			Callee:    &SelectorExpr{Receiver: &NameExpr{Name: valueName}, Name: bindClassObjectMethod},
+			Arguments: []CallArg{{Value: &NameExpr{Name: valueName}}},
+		}})
+	}
 	returnsError := false
 	for _, initializer := range initializers {
 		returnsError = returnsError || initializer.ReturnsErr
 		call := ExprNode(&NameExpr{Name: valueName})
 		for _, part := range initializer.Path {
-			call = &SelectorExpr{Receiver: call, Name: part}
+			call = &SelectorExpr{Receiver: call, Name: classParentFieldName(part)}
 		}
 		call = &SelectorExpr{Receiver: call, Name: initializer.Helper}
 		call = &CallExpr{Callee: call, Arguments: make([]CallArg, len(initializer.Arguments))}

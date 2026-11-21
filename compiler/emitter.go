@@ -1941,6 +1941,7 @@ func emitClass(out *strings.Builder, file *File, class *ClassDecl, context const
 	if err != nil {
 		return err
 	}
+	dispatch := newClassDispatch(methods, context)
 	for _, initializer := range classInitializers(class) {
 		methods = append(methods, *initializer)
 	}
@@ -1987,7 +1988,7 @@ func emitClass(out *strings.Builder, file *File, class *ClassDecl, context const
 			if err != nil {
 				return err
 			}
-			out.WriteString(direct)
+			out.WriteString(dispatch.rewrite(direct, true))
 			out.WriteByte('\n')
 			continue
 		}
@@ -2109,7 +2110,7 @@ func emitClass(out *strings.Builder, file *File, class *ClassDecl, context const
 		body = qualifyImplicitClassFields(body, class, classesForClass(context, class), method)
 		body = rewriteProtectedMemberSource(body, class, classesForClass(context, class), method)
 
-		out.WriteString(body)
+		out.WriteString(dispatch.rewrite(body, false))
 
 		out.WriteString("\n}\n\n")
 	}
@@ -2123,7 +2124,11 @@ func emitClass(out *strings.Builder, file *File, class *ClassDecl, context const
 		helperName := constructorInitializerHelperName(*initializer)
 		fmt.Fprintf(out, "func (this *%s) %s(%s) error {\n", class.Name+typeParameterNames(class.TypeParamsAST), helperName, parameters)
 		for _, parentCall := range initializerParents[initializer] {
-			call := "this." + strings.Join(parentCall.path, ".") + "." + parentCall.helper + "(" + strings.Join(parentCall.arguments, ", ") + ")"
+			fields := make([]string, 0, len(parentCall.path))
+			for _, parent := range parentCall.path {
+				fields = append(fields, classParentFieldName(parent))
+			}
+			call := "this." + strings.Join(fields, ".") + "." + parentCall.helper + "(" + strings.Join(parentCall.arguments, ", ") + ")"
 			fmt.Fprintf(out, "\tif err := %s; err != nil { return err }\n", call)
 		}
 		if strings.TrimSpace(methodResultSource(*initializer)) == "" {
@@ -2132,6 +2137,12 @@ func emitClass(out *strings.Builder, file *File, class *ClassDecl, context const
 			fmt.Fprintf(out, "\treturn this.%s(%s)\n", methodName, strings.Join(arguments, ", "))
 		}
 		out.WriteString("}\n\n")
+	}
+	if context.Introspection != nil && context.Introspection.Enabled {
+		emitDynamicObjectBinding(out, class)
+		if err := dispatch.emit(out, class, classes, context); err != nil {
+			return err
+		}
 	}
 
 	// Runtime class descriptors describe concrete field and method types. A
@@ -2528,8 +2539,9 @@ func importedParentForMethod(class *ClassDecl, method Method, classes map[string
 	if classDeclaresMethod(class, method) {
 		return "", false
 	}
+	foreignBody := method.Owner != nil && class.Owner != nil && method.Owner.Package != class.Owner.Package
 	for _, parentName := range classParentNames(class) {
-		if !strings.Contains(parentName, ".") {
+		if !strings.Contains(parentName, ".") && !foreignBody {
 			continue
 		}
 		parent := classes[parentName]
@@ -2630,10 +2642,8 @@ func emitImportedInheritedMethod(out *strings.Builder, class *ClassDecl, parentN
 		fmt.Fprintf(out, " %s", result)
 	}
 	out.WriteString(" {\n")
-	out.WriteString("\tif this.GppDynamicObject == nil {\n")
-	out.WriteString("\t\tthis.GppDynamicObject = this\n")
-	out.WriteString("\t}\n")
-	fmt.Fprintf(out, "\tthis.%s.GppDynamicObject = this.GppDynamicObject\n", fieldName)
+	fmt.Fprintf(out, "\tif owner, ok := this.GppDynamicObject.(interface { %s(any) bool }); !ok || !owner.%s(this) { this.%s(this) }\n",
+		ownsClassReceiverMethod, ownsClassReceiverMethod, bindClassObjectMethod)
 	methodTypeArguments := ""
 	if len(typeParameters) > 0 {
 		names := make([]string, 0, len(typeParameters))

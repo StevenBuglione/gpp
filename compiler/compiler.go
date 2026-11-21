@@ -33,6 +33,7 @@ type CompileOptions struct {
 
 const generatedFilesManifestName = ".gpp-generated-files.json"
 const generatedGoVersion = "1.27"
+const generatedCodeSchema = 2
 
 type generatedFilesManifest struct {
 	Files    []string                          `json:"files"`
@@ -629,6 +630,7 @@ func generatedPackageFingerprints(program *Program, model *SemanticModel, option
 		}
 		sort.Strings(dependencies)
 		h := sha256.New()
+		writePackageHashPart(h, fmt.Sprintf("code-schema=%d", generatedCodeSchema))
 		writePackageHashPart(h, "module="+options.ModulePath)
 		writePackageHashPart(h, "java-runtime-import="+options.JavaRuntimeImport)
 		writePackageHashPart(h, "exception-runtime-import="+exceptionRuntime)

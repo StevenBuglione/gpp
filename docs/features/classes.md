@@ -377,6 +377,11 @@ personalized := PersonalizedGreeting(prefix: "Welcome", name: "Ada")
 localized := LocalizedGreeting("Ada", "Welcome", "en")
 ```
 
+A parent initializer can call a public or protected method on `this`. If the
+derived class overrides that method, the call reaches the derived implementation
+even before the derived initializer has run. Fields assigned later by the
+derived initializer still have their Go zero values at that point.
+
 `init` can be overloaded; a construction call must match an overload. Named
 arguments refer to parameter names, as in `PersonalizedGreeting` above. If a
 class has no `init`, `Type(...)` instead initializes fields by position or

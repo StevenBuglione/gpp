@@ -866,6 +866,9 @@ func validateClass(pkg *PackageSymbols, class *ClassDecl) error {
 		if field.Name == "GppDynamicClass" || field.Name == "GppDynamicObject" {
 			return fieldDiagnosticf(class, &field, "class %s field %s is reserved for GPP runtime metadata", class.Name, field.Name)
 		}
+		if field.Name == bindClassObjectMethod || field.Name == ownsClassReceiverMethod || strings.HasPrefix(field.Name, classDispatchPrefix) {
+			return fieldDiagnosticf(class, &field, "class %s field %s is reserved for GPP generated methods", class.Name, field.Name)
+		}
 		if fields[field.Name] {
 			return fieldDiagnosticf(class, &field, "class %s declares field %s more than once", class.Name, field.Name)
 		}
@@ -893,8 +896,9 @@ func validateClass(pkg *PackageSymbols, class *ClassDecl) error {
 		if method.IsStatic && tokensContainIdentifier(methodBodyTokens(method), "this") {
 			return methodDiagnosticf(class, &method, "static method %s has no this", method.Name)
 		}
-		if method.Name == "GppRuntimeClass" || method.Name == "GppRuntimeObject" ||
-			strings.HasPrefix(method.Name, "GppInitialize") || strings.HasPrefix(method.Name, "__gppInit") {
+		if method.Name == "GppRuntimeClass" || method.Name == "GppRuntimeObject" || method.Name == bindClassObjectMethod || method.Name == ownsClassReceiverMethod ||
+			strings.HasPrefix(method.Name, "GppInitialize") || strings.HasPrefix(method.Name, "__gppInit") ||
+			strings.HasPrefix(method.Name, classDispatchPrefix) {
 			return methodDiagnosticf(class, &method, "class %s method %s is reserved for GPP generated methods", class.Name, method.Name)
 		}
 		if fields[method.Name] {
