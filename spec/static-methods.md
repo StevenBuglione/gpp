@@ -700,6 +700,16 @@ leaves the class uninitialized. Reflective `Get()` and `Set(value)` initialize
 the declaring class, including reflective reads of constants. `Set` returns an
 error for final fields and for values outside the declared Go field type.
 
+Use `GetBoolean` through `GetDouble` and `SetBoolean` through `SetDouble` for
+Java primitive reflection. The suffixes `Boolean`, `Byte`, `Char`, `Short`,
+`Int`, `Long`, `Float`, and `Double` correspond to `bool`, `int8`, `uint16`,
+`int16`, `int32`, `int64`, `float32`, and `float64`. The typed accessors
+accept Java widening conversions for those field types and their Go aliases.
+Reads return a typed value and an error. Writes return an error on invalid
+conversions and final fields. The accessors initialize the declaring class
+before checking conversions. GPP metadata expressions also support lower
+camel case, such as `field.getInt()` and `field.setInt(value)`.
+
 ---
 
 # Non-goals

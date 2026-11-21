@@ -71,7 +71,7 @@ func transformIntrospectionMetadataAST(src string, context constructorContext) (
 				return
 			}
 			kind := introspectionExpressionKindNode(selector.Receiver, metadataTypes, context, valueTypes)
-			if replacement, exists := introspectionSelectorNames[selector.Name]; exists && introspectionSelectorValid(kind, selector.Name) {
+			if replacement, exists := introspectionSelectorReplacement(kind, selector.Name); exists {
 				span := selector.Span()
 				addEdit(span.End-len(selector.Name), span.End, replacement)
 			}
@@ -403,6 +403,16 @@ func introspectionSelectorValid(kind introspectionExprKind, name string) bool {
 	}
 }
 
+func introspectionSelectorReplacement(kind introspectionExprKind, name string) (string, bool) {
+	if replacement, exists := introspectionSelectorNames[name]; exists && introspectionSelectorValid(kind, name) {
+		return replacement, true
+	}
+	if kind == introspectionStaticField {
+		return staticPrimitiveReflectionSelector(name)
+	}
+	return "", false
+}
+
 func walkIntrospectionBlockExpressions(block *BlockStmt, visit func(ExprNode)) {
 	if block == nil || visit == nil {
 		return
@@ -658,7 +668,7 @@ func lowerIntrospectionMetadataSelectorNode(selector *SelectorExpr, context cons
 		return nil, false, nil
 	}
 	kind := introspectionExpressionKindNode(selector.Receiver, context.CurrentIntrospectionKinds, context, context.CurrentParameterTypes)
-	if replacement, exists := introspectionSelectorNames[selector.Name]; exists && introspectionSelectorValid(kind, selector.Name) {
+	if replacement, exists := introspectionSelectorReplacement(kind, selector.Name); exists {
 		selector.Name = replacement
 		return selector, true, nil
 	}

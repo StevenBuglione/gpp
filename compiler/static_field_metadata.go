@@ -21,6 +21,21 @@ type GppStaticField struct {
 	Set         func(any) error
 }
 
+type StaticFieldRegistration struct {
+	field GppStaticField
+	goType gppReflect.Type
+}
+
+type __gppStaticFieldRegistration = StaticFieldRegistration
+
+func TypedStaticField[T any](field GppStaticField) StaticFieldRegistration {
+	return StaticFieldRegistration{field: field, goType: gppReflect.TypeFor[T]()}
+}
+
+func __gppTypedStaticField[T any](field GppStaticField) StaticFieldRegistration {
+	return TypedStaticField[T](field)
+}
+
 // The registry keeps static metadata off the existing public GppClass and
 // instance GppField layouts. The stored slices are immutable snapshots.
 var gppStaticFieldRegistry gppSync.Map
@@ -35,20 +50,36 @@ func gppCloneStaticField(field GppStaticField) GppStaticField {
 }
 
 func ClassWithStaticFields(class *GppClass, fields []GppStaticField) *GppClass {
-	declarations := make([]GppStaticField, len(fields))
+	declarations := make([]StaticFieldRegistration, len(fields))
 	for index, field := range fields {
-		declarations[index] = gppCloneStaticField(field)
-		declarations[index].Owner = class
+		declarations[index].field = field
+	}
+	return ClassWithTypedStaticFields(class, declarations)
+}
+
+func ClassWithTypedStaticFields(class *GppClass, fields []StaticFieldRegistration) *GppClass {
+	declarations := make([]StaticFieldRegistration, len(fields))
+	for index, field := range fields {
+		declarations[index] = field
+		declarations[index].field = gppCloneStaticField(field.field)
+		declarations[index].field.Owner = class
 	}
 	gppStaticFieldRegistry.LoadOrStore(class, declarations)
 	return class
 }
 
-func __gppClassWithStaticFields(class *GppClass, fields []GppStaticField) *GppClass {
-	return ClassWithStaticFields(class, fields)
+func __gppClassWithTypedStaticFields(class *GppClass, fields []StaticFieldRegistration) *GppClass {
+	return ClassWithTypedStaticFields(class, fields)
 }
 
 func SetStaticField[T any](name, typeName string, input any, set func(T)) error {
+	if write, ok := input.(gppPrimitiveFieldWrite); ok {
+		converted, valid := gppWidenFieldPrimitive(write.value, gppReflect.TypeFor[T]())
+		if !valid {
+			return GppInvocationError("static field " + name + " cannot be written with " + gppReflect.TypeOf(write.value).String())
+		}
+		input = converted
+	}
 	if input == nil {
 		switch gppReflect.TypeFor[T]().Kind() {
 		case gppReflect.Chan, gppReflect.Func, gppReflect.Interface, gppReflect.Map,
@@ -70,7 +101,7 @@ func __gppSetStaticField[T any](name, typeName string, input any, set func(T)) e
 	return SetStaticField(name, typeName, input, set)
 }
 
-func (class *GppClass) gppDeclaredStaticFields() []GppStaticField {
+func (class *GppClass) gppDeclaredStaticFields() []StaticFieldRegistration {
 	if class == nil {
 		return nil
 	}
@@ -78,20 +109,21 @@ func (class *GppClass) gppDeclaredStaticFields() []GppStaticField {
 	if !ok {
 		return nil
 	}
-	return stored.([]GppStaticField)
+	return stored.([]StaticFieldRegistration)
 }
 
 // DeclaredStaticFields returns every field declared by class, in source order.
 func (class *GppClass) DeclaredStaticFields() []GppStaticField {
 	var fields []GppStaticField
-	for _, field := range class.gppDeclaredStaticFields() {
-		fields = append(fields, gppCloneStaticField(field))
+	for _, registration := range class.gppDeclaredStaticFields() {
+		fields = append(fields, gppCloneStaticField(registration.field))
 	}
 	return fields
 }
 
 func (class *GppClass) DeclaredStaticField(name string) *GppStaticField {
-	for _, field := range class.gppDeclaredStaticFields() {
+	for _, registration := range class.gppDeclaredStaticFields() {
+		field := registration.field
 		if field.Name == name {
 			result := gppCloneStaticField(field)
 			return &result
@@ -108,7 +140,8 @@ func (class *GppClass) visitPublicStaticFields(visit func(GppStaticField) bool) 
 			return true
 		}
 		seen[current] = true
-		for _, field := range current.gppDeclaredStaticFields() {
+		for _, registration := range current.gppDeclaredStaticFields() {
+			field := registration.field
 			if field.Public && !visit(field) {
 				return false
 			}
@@ -179,16 +212,17 @@ func staticFieldMetadataAccessor(class *ClassDecl, field Field) string {
 }
 
 func emitStaticFieldMetadata(out *strings.Builder, class *ClassDecl, context constructorContext) {
-	out.WriteString(", []GppStaticField{\n")
+	out.WriteString(", []__gppStaticFieldRegistration{\n")
 	for _, field := range class.StaticFields {
 		accessor := staticFieldMetadataAccessor(class, field)
-		fmt.Fprintf(out, "\t{Name: %q, Type: &GppType{Name: %q}, Public: %t, Final: %t, Constant: %t, Annotations: %s,\n",
-			field.Name, fieldTypeSource(field), memberVisibility(field.Name) == memberPublic, field.IsFinal || field.IsConstant,
+		sourceType := fieldTypeSource(field)
+		fmt.Fprintf(out, "\t__gppTypedStaticField[%s](GppStaticField{Name: %q, Type: &GppType{Name: %q}, Public: %t, Final: %t, Constant: %t, Annotations: %s,\n",
+			transformPolymorphicType(sourceType, context), field.Name, sourceType, memberVisibility(field.Name) == memberPublic, field.IsFinal || field.IsConstant,
 			field.IsConstant, annotationUsesLiteral(field.Annotations, context))
 		// Binding interface method values keeps the getter's dependencies out
 		// of Go package initialization. A class initializer can consult its
 		// own metadata without creating a declaration initialization cycle.
-		fmt.Fprintf(out, "\t\tGet: interface { get() any }(%s{}).get, Set: interface { set(any) error }(%s{}).set},\n",
+		fmt.Fprintf(out, "\t\tGet: interface { get() any }(%s{}).get, Set: interface { set(any) error }(%s{}).set}),\n",
 			accessor, accessor)
 	}
 	out.WriteString("})")
@@ -230,7 +264,7 @@ func emitGenericStaticClassDescriptor(out *strings.Builder, class *ClassDecl, cl
 	if len(class.StaticFields) == 0 {
 		return
 	}
-	fmt.Fprintf(out, "var Gpp%sClass = __gppClassWithStaticFields(&GppClass{Name: %q, Package: %q, Parents: %s, Annotations: %s}",
+	fmt.Fprintf(out, "var Gpp%sClass = __gppClassWithTypedStaticFields(&GppClass{Name: %q, Package: %q, Parents: %s, Annotations: %s}",
 		class.Name, class.Name, templatePackageScope(context.ModulePath, context.Package),
 		classDescriptorParents(class, classes, context), annotationUsesLiteral(class.Annotations, context))
 	emitStaticFieldMetadata(out, class, context)

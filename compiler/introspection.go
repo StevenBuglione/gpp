@@ -332,6 +332,7 @@ func __gppFormatObject(class *GppClass, object any, pretty bool) string {
 
 	`
 	definitions += staticFieldMetadataRuntime()
+	definitions += staticPrimitiveReflectionRuntime()
 	definitions = strings.ReplaceAll(definitions, "gppSync", syncAlias)
 	definitions = strings.ReplaceAll(definitions, "gppFmt", fmtAlias)
 	definitions = strings.ReplaceAll(definitions, "gppReflect", reflectAlias)
@@ -347,6 +348,7 @@ type GppAnnotation = gppRuntime.GppAnnotation
 type GppAnnotations = gppRuntime.GppAnnotations
 type GppField = gppRuntime.GppField
 type GppStaticField = gppRuntime.GppStaticField
+type __gppStaticFieldRegistration = gppRuntime.StaticFieldRegistration
 type GppMethod = gppRuntime.GppMethod
 type GppFunction = gppRuntime.GppFunction
 type GppParameter = gppRuntime.GppParameter
@@ -354,7 +356,8 @@ type GppClass = gppRuntime.GppClass
 
 func __gppInvocationError(message string) error { return gppRuntime.GppInvocationError(message) }
 func __gppRegisterClass(class *GppClass) { gppRuntime.RegisterClass(class) }
-func __gppClassWithStaticFields(class *GppClass, fields []GppStaticField) *GppClass { return gppRuntime.ClassWithStaticFields(class, fields) }
+func __gppClassWithTypedStaticFields(class *GppClass, fields []__gppStaticFieldRegistration) *GppClass { return gppRuntime.ClassWithTypedStaticFields(class, fields) }
+func __gppTypedStaticField[T any](field GppStaticField) __gppStaticFieldRegistration { return gppRuntime.TypedStaticField[T](field) }
 func __gppSetStaticField[T any](name, typeName string, input any, set func(T)) error { return gppRuntime.SetStaticField(name, typeName, input, set) }
 func __gppClassByName(name string) *GppClass { return gppRuntime.ClassByName(name) }
 func __gppRegisterFunction(function GppFunction) { gppRuntime.RegisterFunction(function) }
@@ -467,7 +470,7 @@ func emitClassDescriptor(out *strings.Builder, class *ClassDecl, classes map[str
 	}
 	fmt.Fprintf(out, "var Gpp%sClass = ", class.Name)
 	if len(class.StaticFields) != 0 {
-		out.WriteString("__gppClassWithStaticFields(")
+		out.WriteString("__gppClassWithTypedStaticFields(")
 	}
 	fmt.Fprintf(out, "&GppClass{Name: %q, Package: %q, DecodeGOB: %s, Parents: %s, Annotations: %s, Methods: []GppMethod{\n", class.Name, templatePackageScope(context.ModulePath, context.Package), decodeGOB, parents, annotationUsesLiteral(class.Annotations, context))
 	methods, err := effectiveMethodDescriptors(class, classes, false, map[*ClassDecl]bool{})
