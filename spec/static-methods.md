@@ -681,9 +681,8 @@ the object held by a final reference according to its type.
 
 The `static const` syntax covers compile-time constants. The `static final`
 syntax always uses runtime initialization. Java-specific constant folding and interface initialization remain open.
-Blank-final analysis currently requires structured branches. Transfers across
-an exception handling boundary and Go `goto` in blank-final initialization
-remain open.
+Blank-final analysis checks structured branches through `try` and `catch`.
+Go `goto` in blank-final initialization remains open.
 
 ## Static field reflection
 

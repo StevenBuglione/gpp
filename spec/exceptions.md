@@ -1139,6 +1139,16 @@ The compiler must preserve this behavior.
 
 ---
 
+# Branches Through Finally
+
+A `break` or `continue` inside `try` or `catch` can target an enclosing
+loop. A `break` can also exit an enclosing switch or select. The branch
+runs each crossed `finally` block from innermost to outermost before
+control reaches the target. An exception thrown during cleanup takes
+precedence over the pending branch.
+
+---
+
 # Catch and Return
 
 Returning from a `catch` block is allowed.

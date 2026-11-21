@@ -3065,10 +3065,12 @@ func validateFinallyControlTransfersBlock(block *BlockStmt) error {
 		}
 	}
 	visitStmt = func(statement Stmt) {
-		if statement == nil || result != nil {
+		if statement == nil || isNilStmt(statement) || result != nil {
 			return
 		}
 		switch value := statement.(type) {
+		case *BlockStmt:
+			visitBlock(value)
 		case *ReturnStmt:
 			result = fmt.Errorf("control transfer from finally is not allowed: return")
 		case *BranchStmt:
@@ -3106,6 +3108,7 @@ func validateFinallyControlTransfersBlock(block *BlockStmt) error {
 }
 
 func lowerTryASTNode(tryBlock *ast.BlockStmt, clauses []catchClause, finallyBlock *ast.BlockStmt, hasFinally bool, context constructorContext) (ast.Stmt, error) {
+	branches := lowerTryBranchTransfers(tryBlock, clauses)
 	deferBody := []ast.Stmt{}
 	if hasFinally {
 		deferBody = append(deferBody, &ast.DeferStmt{Call: &ast.CallExpr{
@@ -3125,6 +3128,37 @@ func lowerTryASTNode(tryBlock *ast.BlockStmt, clauses []catchClause, finallyBloc
 		Cond: &ast.BinaryExpr{X: thrownError, Op: token.NEQ, Y: identifier("nil")},
 		Body: &ast.BlockStmt{},
 	}
+	onRecovered := &ast.BlockStmt{}
+	if len(branches.transfers) != 0 {
+		// A deferred action in the try can throw while a branch is pending.
+		// The exception supersedes that branch even if this catch handles it.
+		onRecovered.List = append(onRecovered.List, branches.assign(0))
+	}
+	onRecovered.List = append(onRecovered.List,
+		&ast.AssignStmt{
+			Lhs: []ast.Expr{thrownError, isThrown},
+			Tok: token.DEFINE,
+			Rhs: []ast.Expr{call(identifier("__gppUnwrapThrown"), recovered)},
+		},
+		&ast.IfStmt{
+			Cond: &ast.UnaryExpr{Op: token.NOT, X: isThrown},
+			Body: &ast.BlockStmt{List: []ast.Stmt{
+				&ast.ExprStmt{X: call(identifier("panic"), recovered)},
+			}},
+		},
+		&ast.AssignStmt{
+			Lhs: []ast.Expr{handled},
+			Tok: token.DEFINE,
+			Rhs: []ast.Expr{identifier("false")},
+		},
+		catchIf,
+		&ast.IfStmt{
+			Cond: &ast.UnaryExpr{Op: token.NOT, X: handled},
+			Body: &ast.BlockStmt{List: []ast.Stmt{
+				&ast.ExprStmt{X: call(identifier("panic"), recovered)},
+			}},
+		},
+	)
 	recoverBody := []ast.Stmt{
 		&ast.AssignStmt{
 			Lhs: []ast.Expr{recovered},
@@ -3133,31 +3167,7 @@ func lowerTryASTNode(tryBlock *ast.BlockStmt, clauses []catchClause, finallyBloc
 		},
 		&ast.IfStmt{
 			Cond: &ast.BinaryExpr{X: recovered, Op: token.NEQ, Y: identifier("nil")},
-			Body: &ast.BlockStmt{List: []ast.Stmt{
-				&ast.AssignStmt{
-					Lhs: []ast.Expr{thrownError, isThrown},
-					Tok: token.DEFINE,
-					Rhs: []ast.Expr{call(identifier("__gppUnwrapThrown"), recovered)},
-				},
-				&ast.IfStmt{
-					Cond: &ast.UnaryExpr{Op: token.NOT, X: isThrown},
-					Body: &ast.BlockStmt{List: []ast.Stmt{
-						&ast.ExprStmt{X: call(identifier("panic"), recovered)},
-					}},
-				},
-				&ast.AssignStmt{
-					Lhs: []ast.Expr{handled},
-					Tok: token.DEFINE,
-					Rhs: []ast.Expr{identifier("false")},
-				},
-				catchIf,
-				&ast.IfStmt{
-					Cond: &ast.UnaryExpr{Op: token.NOT, X: handled},
-					Body: &ast.BlockStmt{List: []ast.Stmt{
-						&ast.ExprStmt{X: call(identifier("panic"), recovered)},
-					}},
-				},
-			}},
+			Body: onRecovered,
 		},
 	}
 	catchSwitch, err := lowerCatchSwitch(thrownError, handled, clauses, context)
@@ -3181,7 +3191,7 @@ func lowerTryASTNode(tryBlock *ast.BlockStmt, clauses []catchClause, finallyBloc
 		Body: &ast.BlockStmt{List: runBody},
 	})}
 
-	return run, nil
+	return branches.dispatchAfter(run), nil
 }
 
 func lowerCatchSwitch(thrownError, handled ast.Expr, clauses []catchClause, context constructorContext) (ast.Stmt, error) {
