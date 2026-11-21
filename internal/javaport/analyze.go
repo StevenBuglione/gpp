@@ -180,14 +180,22 @@ type JavaCatch struct {
 }
 
 type JavaSwitchCase struct {
-	Labels  []*JavaExpression `json:"labels"`
-	Default bool              `json:"default"`
-	Pattern bool              `json:"pattern"`
-	Group   *MethodBody       `json:"group,omitempty"`
-	Value   *JavaExpression   `json:"value,omitempty"`
-	Rule    *JavaStatement    `json:"rule,omitempty"`
-	Line    int64             `json:"line"`
-	Column  int64             `json:"column"`
+	Labels   []*JavaExpression   `json:"labels"`
+	Default  bool                `json:"default"`
+	Pattern  bool                `json:"pattern"`
+	Patterns []JavaSwitchPattern `json:"patterns,omitempty"`
+	Guard    *JavaExpression     `json:"guard,omitempty"`
+	Group    *MethodBody         `json:"group,omitempty"`
+	Value    *JavaExpression     `json:"value,omitempty"`
+	Rule     *JavaStatement      `json:"rule,omitempty"`
+	Line     int64               `json:"line"`
+	Column   int64               `json:"column"`
+}
+
+type JavaSwitchPattern struct {
+	Kind      string `json:"kind"`
+	Type      string `json:"type,omitempty"`
+	BindingID int64  `json:"bindingId,omitempty"`
 }
 
 type JavaExpression struct {

@@ -297,7 +297,7 @@ public class Switches {
 			t.Fatal(err)
 		}
 	})
-	t.Run("pattern labels report an unsupported feature", func(t *testing.T) {
+	t.Run("guarded pattern labels", func(t *testing.T) {
 		if release < 21 {
 			t.Skip("stable pattern labels require Java 21 or newer")
 		}
@@ -315,8 +315,12 @@ public class Switches {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := EmitGPP(report); err == nil || !strings.Contains(err.Error(), "unsupported Java switch pattern label") {
-			t.Fatalf("expected a source-located unsupported pattern diagnostic, got %v", err)
+		translated, err := EmitGPP(report)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(translated, "javart.MatchReference[*javart.String]") {
+			t.Fatalf("missing attributed reference matching\n%s", translated)
 		}
 	})
 }

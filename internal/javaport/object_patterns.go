@@ -50,33 +50,49 @@ func (ctx javaObjectContext) patternSlot(id int64, javaType string) (string, err
 }
 
 func (ctx javaObjectContext) instanceOfBinding(expression *JavaExpression) (string, error) {
-	if expression.Operand == nil || expression.Target == nil {
+	if expression.Operand == nil || expression.Target == nil || expression.BindingID <= 0 {
 		return "", fmt.Errorf("missing attributed Java instanceof binding")
 	}
 	source, target := expression.Operand.Type, expression.Target.Type
 	if source != "null" && !ctx.program.referenceType(source) {
 		return "", fmt.Errorf("unsupported Java reference pattern operand %s", source)
 	}
-	slot, err := ctx.patternSlot(expression.BindingID, target)
-	if err != nil {
-		return "", err
-	}
 	value, err := ctx.expression(expression.Operand)
 	if err != nil {
 		return "", err
 	}
+	return ctx.typePatternTest(value, target, expression.BindingID)
+}
+
+func (ctx javaObjectContext) referencePatternMatch(value, target string) (string, error) {
+	if !ctx.program.referenceType(target) {
+		return "", fmt.Errorf("unsupported Java reference pattern type %s", target)
+	}
 	ctx.program.runtime = true
-	var match string
 	if ctx.arrayElementType(target) != "" {
 		typeOf, err := ctx.arrayTypeCall(target, "ArrayTypeOf")
 		if err != nil {
 			return "", err
 		}
-		match = "javart.MatchArray(" + value + ", " + typeOf + ")"
-	} else if iface := ctx.program.interfaces[target]; iface != nil {
-		match = ctx.interfaceReferenceCall("MatchInterface", iface, value)
-	} else {
-		match = "javart.MatchReference[" + ctx.program.objectGoType(target) + "](" + value + ")"
+		return "javart.MatchArray(" + value + ", " + typeOf + ")", nil
+	}
+	if iface := ctx.program.interfaces[target]; iface != nil {
+		return ctx.interfaceReferenceCall("MatchInterface", iface, value), nil
+	}
+	return "javart.MatchReference[" + ctx.program.objectGoType(target) + "](" + value + ")", nil
+}
+
+func (ctx javaObjectContext) typePatternTest(value, target string, bindingID int64) (string, error) {
+	match, err := ctx.referencePatternMatch(value, target)
+	if err != nil {
+		return "", err
+	}
+	if bindingID == 0 {
+		return "func() bool { _, javaMatched := " + match + "; return javaMatched }()", nil
+	}
+	slot, err := ctx.patternSlot(bindingID, target)
+	if err != nil {
+		return "", err
 	}
 	// Assign only after a successful match. The single nominal check also
 	// returns the proper base view for most-derived Go objects.

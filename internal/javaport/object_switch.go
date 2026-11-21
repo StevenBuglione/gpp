@@ -69,7 +69,7 @@ func (ctx javaObjectContext) switchYield(expression *JavaExpression) (string, er
 
 func (ctx javaObjectContext) emitJavaSwitch(selector *JavaExpression, cases []JavaSwitchCase, result string, id int, target *javaControlTarget) (string, error) {
 	var code, declarations, arms strings.Builder
-	if err := ctx.emitJavaSwitchMatch(&code, selector, cases); err != nil {
+	if err := ctx.emitJavaSwitchMatch(&code, selector, cases, target == nil); err != nil {
 		return "", err
 	}
 	for index, arm := range cases {
@@ -89,7 +89,7 @@ func (ctx javaObjectContext) emitJavaSwitch(selector *JavaExpression, cases []Ja
 	return code.String(), nil
 }
 
-func (ctx javaObjectContext) emitJavaSwitchMatch(out *strings.Builder, selector *JavaExpression, cases []JavaSwitchCase) error {
+func (ctx javaObjectContext) emitJavaSwitchMatch(out *strings.Builder, selector *JavaExpression, cases []JavaSwitchCase, isExpression bool) error {
 	if selector == nil {
 		return fmt.Errorf("missing attributed Java switch selector")
 	}
@@ -110,9 +110,10 @@ func (ctx javaObjectContext) emitJavaSwitchMatch(out *strings.Builder, selector 
 		return err
 	}
 	nullCase, defaultCase := -1, -1
+	requiresMatch := isExpression || (reference && selectorType != javaStringType && !legacySwitchInteger(primitive))
 	var matches strings.Builder
 	for index, arm := range cases {
-		if arm.Pattern {
+		if arm.Pattern && len(arm.Patterns) == 0 {
 			return fmt.Errorf("%d:%d: unsupported Java switch pattern label", arm.Line, arm.Column)
 		}
 		if arm.Default {
@@ -124,6 +125,7 @@ func (ctx javaObjectContext) emitJavaSwitchMatch(out *strings.Builder, selector 
 				return fmt.Errorf("missing attributed Java switch case constant")
 			}
 			if label.Kind == "NULL_LITERAL" {
+				requiresMatch = true
 				nullCase = index
 				continue
 			}
@@ -150,6 +152,14 @@ func (ctx javaObjectContext) emitJavaSwitchMatch(out *strings.Builder, selector 
 			}
 			labels = append(labels, match)
 		}
+		if len(arm.Patterns) != 0 {
+			requiresMatch = true
+			test, err := ctx.switchPatternTest(arm.Patterns, arm.Guard)
+			if err != nil {
+				return fmt.Errorf("%d:%d: %w", arm.Line, arm.Column, err)
+			}
+			labels = append(labels, test)
+		}
 		if len(labels) != 0 {
 			fmt.Fprintf(&matches, "case %s:\njavaSwitchCase = %d\n", strings.Join(labels, ", "), index)
 		}
@@ -167,9 +177,36 @@ func (ctx javaObjectContext) emitJavaSwitchMatch(out *strings.Builder, selector 
 	out.WriteString(matches.String())
 	if defaultCase != -1 {
 		fmt.Fprintf(out, "default:\njavaSwitchCase = %d\n", defaultCase)
+	} else if requiresMatch {
+		ctx.program.runtime = true
+		out.WriteString("default:\njavart.Throw(&javart.MatchException{})\n")
 	}
 	out.WriteString("}\n")
 	return nil
+}
+
+func (ctx javaObjectContext) switchPatternTest(patterns []JavaSwitchPattern, guard *JavaExpression) (string, error) {
+	tests := make([]string, 0, len(patterns))
+	for _, pattern := range patterns {
+		if pattern.Kind != "BINDING_PATTERN" {
+			return "", fmt.Errorf("unsupported Java switch pattern label %s", pattern.Kind)
+		}
+		test, err := ctx.typePatternTest("javaSelector", pattern.Type, pattern.BindingID)
+		if err != nil {
+			return "", err
+		}
+		tests = append(tests, test)
+	}
+	test := "(" + strings.Join(tests, " || ") + ")"
+	if guard != nil {
+		condition, err := ctx.converted(guard, "boolean")
+		if err != nil {
+			return "", err
+		}
+		// Match alternatives in order, then evaluate the guard once.
+		test += " && (" + condition + ")"
+	}
+	return test, nil
 }
 
 func legacySwitchInteger(javaType string) bool {

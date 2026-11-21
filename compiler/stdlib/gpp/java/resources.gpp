@@ -96,6 +96,8 @@ func throwableSuppression(value Throwable, create bool) *suppressedErrors {
         return &failure.suppressed
     case *NullPointerException:
         return &failure.suppressed
+    case *MatchException:
+        return &failure.suppressed
     case *ClassCastException:
         return &failure.suppressed
     case *ArithmeticException:

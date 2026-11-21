@@ -78,6 +78,19 @@ func (*NullPointerException) JavaRuntimeException() {}
 
 func (*NullPointerException) JavaException() {}
 
+// MatchException is thrown when an exhaustive Java switch has no matching arm.
+type MatchException struct {
+    suppressed suppressedErrors
+}
+
+func (*MatchException) Error() string { return "java.lang.MatchException" }
+
+func (*MatchException) JavaClassName() string { return "java.lang.MatchException" }
+
+func (*MatchException) JavaRuntimeException() {}
+
+func (*MatchException) JavaException() {}
+
 type StringIndexOutOfBoundsException struct {
     Index int32
     Length int

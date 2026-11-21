@@ -12,6 +12,7 @@ const (
 	javaNullPointerException        = "java.lang.NullPointerException"
 	javaClassCastException          = "java.lang.ClassCastException"
 	javaArithmeticException         = "java.lang.ArithmeticException"
+	javaMatchException              = "java.lang.MatchException"
 	javaErrorType                   = "java.lang.Error"
 	javaExceptionInInitializerError = "java.lang.ExceptionInInitializerError"
 	javaNoClassDefFoundError        = "java.lang.NoClassDefFoundError"
@@ -32,6 +33,7 @@ var javaCatchTypes = map[string]string{
 	javaNullPointerException:                    "*javart.NullPointerException",
 	javaClassCastException:                      "*javart.ClassCastException",
 	javaArithmeticException:                     "*javart.ArithmeticException",
+	javaMatchException:                          "*javart.MatchException",
 	"java.lang.IndexOutOfBoundsException":       "javart.IndexOutOfBoundsException",
 	"java.lang.ArrayIndexOutOfBoundsException":  "*javart.ArrayIndexOutOfBoundsException",
 	"java.lang.NegativeArraySizeException":      "*javart.NegativeArraySizeException",

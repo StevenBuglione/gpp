@@ -33,6 +33,7 @@ import com.sun.source.tree.NewArrayTree;
 import com.sun.source.tree.NewClassTree;
 import com.sun.source.tree.OpensTree;
 import com.sun.source.tree.ParenthesizedTree;
+import com.sun.source.tree.PatternTree;
 import com.sun.source.tree.ProvidesTree;
 import com.sun.source.tree.RequiresTree;
 import com.sun.source.tree.ReturnTree;
@@ -54,6 +55,7 @@ import com.sun.source.util.TreePath;
 import com.sun.source.util.TreePathScanner;
 import com.sun.source.util.Trees;
 import com.sun.tools.javac.code.Type;
+import java.lang.reflect.Method;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
@@ -374,28 +376,75 @@ class JavaSourceAnalysis {
                 .collect(Collectors.joining(",")) + "]";
         }
 
+        // These tree API additions are unavailable on the supported JDK 17
+        // launcher. Look up the newer public interfaces only when present.
+        private static final Method CASE_PATTERN = treeAccessor("PatternCaseLabelTree", "getPattern");
+        private static final Method CASE_GUARD = treeAccessor("CaseTree", "getGuard");
+
+        private static Method treeAccessor(String type, String method) {
+            try {
+                return Class.forName("com.sun.source.tree." + type).getMethod(method);
+            } catch (ClassNotFoundException | NoSuchMethodException unavailable) {
+                return null;
+            }
+        }
+
+        private static Object readTreeAccessor(Method accessor, Object node) {
+            if (accessor == null) {
+                return null;
+            }
+            try {
+                return accessor.invoke(node);
+            } catch (ReflectiveOperationException failure) {
+                throw new IllegalStateException("cannot read attributed Java tree", failure);
+            }
+        }
+
         @SuppressWarnings("preview")
         private String switchCase(TreePath path, CaseTree arm) {
             boolean fallback = false;
             boolean pattern = false;
+            var patterns = new ArrayList<String>();
             for (Tree label : arm.getLabels()) {
                 String kind = label.getKind().name();
                 if (kind.equals("DEFAULT_CASE_LABEL")) {
                     fallback = true;
                 } else if (!kind.equals("CONSTANT_CASE_LABEL") && !(label instanceof ExpressionTree)) {
                     pattern = true;
+                    Tree child = label instanceof PatternTree ? label :
+                        kind.equals("PATTERN_CASE_LABEL") ? (Tree) readTreeAccessor(CASE_PATTERN, label) : null;
+                    if (child != null) {
+                        patterns.add(switchPattern(TreePath.getPath(path, child)));
+                    }
                 }
             }
             String record = "{\"default\":" + fallback + ",\"pattern\":" + pattern +
                 positionRecord(arm) + ",\"labels\":[" + arm.getExpressions().stream()
                     .map(label -> executableExpression(TreePath.getPath(path, label)))
-                    .collect(Collectors.joining(",")) + "]";
+                    .collect(Collectors.joining(",")) + "],\"patterns\":[" + String.join(",", patterns) + "]";
+            if (readTreeAccessor(CASE_GUARD, arm) instanceof ExpressionTree guard) {
+                record += ",\"guard\":" + executableExpression(new TreePath(path, guard));
+            }
             if (arm.getCaseKind() == CaseTree.CaseKind.STATEMENT) {
                 record += ",\"group\":" + bodyRecord(path, arm.getStatements());
             } else if (arm.getBody() instanceof ExpressionTree value) {
                 record += ",\"value\":" + executableExpression(new TreePath(path, value));
             } else if (arm.getBody() instanceof StatementTree statement) {
                 record += ",\"rule\":" + statementRecord(new TreePath(path, statement));
+            }
+            return record + "}";
+        }
+
+        private String switchPattern(TreePath path) {
+            Tree node = path.getLeaf();
+            String record = "{\"kind\":" + quote(node.getKind().name());
+            if (node instanceof BindingPatternTree binding) {
+                var variable = binding.getVariable();
+                var declaration = trees.getElement(new TreePath(path, variable));
+                long id = variable.getName().length() == 0 || variable.getName().contentEquals("_")
+                    ? 0 : bindingId(declaration);
+                record += ",\"type\":" + quote(expressionType(declaration == null ? null : declaration.asType())) +
+                    ",\"bindingId\":" + id;
             }
             return record + "}";
         }
