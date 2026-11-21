@@ -7,6 +7,24 @@ import (
 	"strings"
 )
 
+func (program *javaObjectProgram) emitObjectIdentity(out *strings.Builder, class *javaObjectClass, name string) {
+	if class.parent == nil {
+		fmt.Fprintf(out, "\nfunc (this *%s) GppJavaOwner() any { return this.javaObjectOwner }\n", name)
+		fmt.Fprintf(out, "\nfunc (this *%s) GppJavaBindOwner(owner any) { this.javaObjectOwner = owner }\n", name)
+	}
+	fmt.Fprintf(out, "\nfunc (this *%s) GppJavaCanonicalObject() any {\n", name)
+	out.WriteString("\tif this == nil { return nil }\n")
+	out.WriteString("\tif owner := this.GppJavaOwner(); owner != nil { return owner }\n\treturn this\n}\n")
+	if class.parent == nil {
+		return
+	}
+	fmt.Fprintf(out, "\nfunc (this *%s) GppJavaReferenceView(target any) any {\n\tswitch target.(type) {\n", name)
+	for ancestor := class.parent; ancestor != nil; ancestor = ancestor.parent {
+		fmt.Fprintf(out, "\tcase %s:\n\t\treturn this.%s()\n", program.objectGoType(ancestor.declaration.Symbol), objectViewName(ancestor))
+	}
+	out.WriteString("\t}\n\treturn nil\n}\n")
+}
+
 func (ctx javaObjectContext) localScope() javaObjectContext {
 	locals := make(map[string]string, len(ctx.locals))
 	maps.Copy(locals, ctx.locals)
@@ -91,6 +109,9 @@ func (program *javaObjectProgram) canConvertReference(source, target string) boo
 	if canWidenBoxingReference(source, target) {
 		return true
 	}
+	if target == javaObjectType {
+		return program.classes[source] != nil || source == javaAutoCloseable || javaCatchTypes[source] != ""
+	}
 	if class := program.classes[source]; class != nil {
 		if target == javaAutoCloseable && class.closeable {
 			return true
@@ -107,6 +128,9 @@ func (program *javaObjectProgram) canConvertReference(source, target string) boo
 }
 
 func (ctx javaObjectContext) convertReference(value, source, target string) (string, error) {
+	if target == javaObjectType && ctx.program.canConvertReference(source, target) && source != "null" {
+		return ctx.program.primitiveLowering.canonicalReference(value), nil
+	}
 	if boxingGoType(target) != "" {
 		return ctx.program.primitiveLowering.convertBoxedReference(value, source, target)
 	}
@@ -118,12 +142,52 @@ func (ctx javaObjectContext) convertReference(value, source, target string) (str
 	}
 	if target == javaAutoCloseable {
 		ctx.program.runtime = true
-		return "javart.AsAutoCloseable(" + value + ")", nil
+		return "javart.CastReference[javart.AutoCloseable](" + value + ")", nil
 	}
 	if ancestor := ctx.program.classes[target]; ancestor != nil && source != target {
 		return "(" + value + ")." + objectViewName(ancestor) + "()", nil
 	}
 	return value, nil
+}
+
+func (ctx javaObjectContext) cast(expression *JavaExpression) (string, error) {
+	if expression.Operand == nil {
+		return "", fmt.Errorf("missing attributed Java cast operand")
+	}
+	source, target := expression.Operand.Type, expression.Type
+	if primitiveTypes[source] != "" || primitiveTypes[target] != "" {
+		return ctx.program.primitiveLowering.cast(expression, ctx.expression)
+	}
+	if ctx.program.canConvertReference(source, target) {
+		return ctx.converted(expression.Operand, target)
+	}
+	if !ctx.program.referenceType(source) || !ctx.program.referenceType(target) ||
+		source == javaThrowableArray || target == javaThrowableArray {
+		return "", fmt.Errorf("unsupported Java reference cast from %s to %s", source, target)
+	}
+	value, err := ctx.expression(expression.Operand)
+	if err != nil {
+		return "", err
+	}
+	ctx.program.runtime = true
+	return "javart.CastReference[" + ctx.program.objectGoType(target) + "](" + value + ")", nil
+}
+
+func (ctx javaObjectContext) instanceOf(expression *JavaExpression) (string, error) {
+	if expression.Operand == nil || expression.Target == nil || expression.Target.Kind != "TYPE" {
+		return "", fmt.Errorf("unsupported Java instanceof pattern")
+	}
+	source, target := expression.Operand.Type, expression.Target.Type
+	if (source != "null" && !ctx.program.referenceType(source)) || !ctx.program.referenceType(target) ||
+		source == javaThrowableArray || target == javaThrowableArray {
+		return "", fmt.Errorf("unsupported Java instanceof test from %s to %s", source, target)
+	}
+	value, err := ctx.expression(expression.Operand)
+	if err != nil {
+		return "", err
+	}
+	ctx.program.runtime = true
+	return "javart.InstanceOf[" + ctx.program.objectGoType(target) + "](" + value + ")", nil
 }
 
 func (ctx javaObjectContext) referenceComparison(expression *JavaExpression) (string, error) {

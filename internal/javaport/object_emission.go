@@ -36,8 +36,7 @@ func (program *javaObjectProgram) emitClass(out *strings.Builder, class *javaObj
 	if class.parent != nil {
 		fmt.Fprintf(out, "\t%s\n", class.baseField())
 	} else {
-		// Empty Go structs can share an address. Java allocations must be distinct.
-		out.WriteString("\t_ byte\n")
+		out.WriteString("\tjavaObjectOwner any\n")
 	}
 	for _, field := range class.fields {
 		if !slices.Contains(field.Modifiers, "STATIC") {
@@ -65,6 +64,7 @@ func (program *javaObjectProgram) emitClass(out *strings.Builder, class *javaObj
 		fmt.Fprintf(out, "\nfunc (this *%s) %s() %s {\n\tif this == nil { return nil }\n\treturn %s\n}\n",
 			name, objectViewName(ancestor), program.objectGoType(ancestor.declaration.Symbol), view)
 	}
+	program.emitObjectIdentity(out, class, name)
 
 	ctx := javaObjectContext{program: program, class: class}
 	if len(class.initializers) > 0 {
@@ -120,6 +120,9 @@ func (ctx javaObjectContext) emitConstructor(out *strings.Builder, method *javaO
 	ctx.arguments = objectParameterNames(declaration.Parameters)
 	allocator := ctx.class.storageName(method.allocatorName())
 	fmt.Fprintf(out, "\nfunc %s(%s) *%s {\n\tthis := new(%s)\n", allocator, parameters, name, name)
+	if ctx.class.parent != nil {
+		out.WriteString("\tthis.GppJavaBindOwner(this)\n")
+	}
 	// Attach the most-derived implementations before entering any Java constructor.
 	for _, methodName := range slices.Sorted(maps.Keys(ctx.class.virtual)) {
 		implementation := ctx.class.virtual[methodName]
@@ -334,6 +337,8 @@ func (ctx javaObjectContext) converted(expression *JavaExpression, target string
 
 func (ctx javaObjectContext) expression(expression *JavaExpression) (string, error) {
 	switch expression.Kind {
+	case "THIS":
+		return "this", nil
 	case "LOCAL_VARIABLE":
 		if name, found := ctx.locals[expression.Name]; found {
 			return name, nil
@@ -378,10 +383,9 @@ func (ctx javaObjectContext) expression(expression *JavaExpression) (string, err
 		value, err := ctx.expression(expression.Operand)
 		return "(" + value + ")", err
 	case "TYPE_CAST":
-		if expression.Operand != nil && primitiveTypes[expression.Type] == "" && boxingGoType(expression.Type) == "" {
-			return ctx.converted(expression.Operand, expression.Type)
-		}
-		return ctx.program.primitiveLowering.cast(expression, ctx.expression)
+		return ctx.cast(expression)
+	case "INSTANCE_OF":
+		return ctx.instanceOf(expression)
 	case "UNARY_PLUS", "UNARY_MINUS", "BITWISE_COMPLEMENT", "LOGICAL_COMPLEMENT":
 		return ctx.program.primitiveLowering.unary(expression, ctx.expression)
 	case "LEFT_SHIFT", "RIGHT_SHIFT", "UNSIGNED_RIGHT_SHIFT":

@@ -8,6 +8,7 @@ import com.sun.source.tree.ExportsTree;
 import com.sun.source.tree.ExpressionStatementTree;
 import com.sun.source.tree.ExpressionTree;
 import com.sun.source.tree.IdentifierTree;
+import com.sun.source.tree.InstanceOfTree;
 import com.sun.source.tree.IfTree;
 import com.sun.source.tree.ImportTree;
 import com.sun.source.tree.LiteralTree;
@@ -350,7 +351,9 @@ class JavaSourceAnalysis {
                 positionRecord(tree);
             if (tree instanceof IdentifierTree identifier) {
                 var element = trees.getElement(path);
-                if (element != null && element.getKind() == ElementKind.PARAMETER) {
+                if (identifier.getName().contentEquals("this")) {
+                    kind = "THIS";
+                } else if (element != null && element.getKind() == ElementKind.PARAMETER) {
                     attributes += ",\"name\":" + quote(identifier.getName().toString());
                 } else if (element != null && element.getKind() == ElementKind.EXCEPTION_PARAMETER) {
                     kind = "CATCH_PARAMETER";
@@ -399,6 +402,10 @@ class JavaSourceAnalysis {
                     ",\"right\":" + executableExpression(new TreePath(path, assignment.getExpression()));
             } else if (tree instanceof TypeCastTree cast) {
                 attributes += ",\"operand\":" + executableExpression(new TreePath(path, cast.getExpression()));
+            } else if (tree instanceof InstanceOfTree test && test.getPattern() == null) {
+                var testedType = trees.getTypeMirror(new TreePath(path, test.getType()));
+                attributes += ",\"operand\":" + executableExpression(new TreePath(path, test.getExpression())) +
+                    ",\"target\":{\"kind\":\"TYPE\",\"type\":" + quote(expressionType(testedType)) + "}";
             } else if (tree instanceof ParenthesizedTree parentheses) {
                 attributes += ",\"operand\":" + executableExpression(new TreePath(path, parentheses.getExpression()));
             } else if (tree instanceof UnaryTree unary) {

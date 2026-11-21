@@ -92,9 +92,17 @@ func (lowering *primitiveLowering) convertBoxedReference(value, source, target s
 	if !canWidenBoxingReference(source, target) {
 		return "", fmt.Errorf("unsupported Java reference conversion from %s to %s", source, target)
 	}
+	if target == javaObjectType {
+		return lowering.canonicalReference(value), nil
+	}
 	// A Go pointer-to-interface conversion must preserve Java null.
 	lowering.javaRuntime = true
 	return "javart.NormalizeReference[" + boxingGoType(target) + "](" + value + ")", nil
+}
+
+func (lowering *primitiveLowering) canonicalReference(value string) string {
+	lowering.javaRuntime = true
+	return "javart.CanonicalReference(" + value + ")"
 }
 
 func (lowering *primitiveLowering) checkedWrapperCast(value, target string) string {

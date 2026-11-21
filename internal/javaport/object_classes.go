@@ -313,6 +313,11 @@ func (program *javaObjectProgram) layoutClass(class *javaObjectClass) error {
 	if class.closeable && class.virtual["GppAutoCloseable"] != nil {
 		return unsupportedSource(class.file, declaration, "Go AutoCloseable marker collides with method GppAutoCloseable")
 	}
+	for _, method := range []string{"GppJavaBindOwner", "GppJavaOwner", "GppJavaCanonicalObject", "GppJavaReferenceView"} {
+		if class.virtual[method] != nil {
+			return unsupportedSource(class.file, declaration, "Go reference bridge collides with method "+method)
+		}
+	}
 	views := map[string]bool{}
 	for ancestor := class.parent; ancestor != nil; ancestor = ancestor.parent {
 		view := objectViewName(ancestor)

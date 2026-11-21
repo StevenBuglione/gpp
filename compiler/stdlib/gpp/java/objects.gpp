@@ -1,0 +1,43 @@
+package gpp.java
+
+// CanonicalReference returns the most-derived view of a Java object, preserving
+// Java null and the ordinary pointer representation of boxed and library types.
+func CanonicalReference(value any) any {
+    if object, ok := value.(interface{ GppJavaCanonicalObject() any }); ok {
+        return object.GppJavaCanonicalObject()
+    }
+    return NormalizeReference(value)
+}
+
+func referenceView[T any](value any) (T, bool) {
+    if result, ok := value.(T); ok {
+        return result, true
+    }
+    if object, ok := value.(interface{ GppJavaReferenceView(any) any }); ok {
+        var witness T
+        result, matched := object.GppJavaReferenceView(witness).(T)
+        return result, matched
+    }
+    var zero T
+    return zero, false
+}
+
+// CastReference checks a Java reference cast and returns the requested view.
+func CastReference[T any](value any) T {
+    value = CanonicalReference(value)
+    if value == nil {
+        var zero T
+        return zero
+    }
+    result, ok := referenceView[T](value)
+    if !ok {
+        Raise(&ClassCastException{})
+    }
+    return result
+}
+
+// InstanceOf implements a Java reference type test. Null never matches.
+func InstanceOf[T any](value any) bool {
+    _, ok := referenceView[T](CanonicalReference(value))
+    return ok
+}
