@@ -829,36 +829,59 @@ func goExprNode(expression ExprNode) (ast.Expr, error) {
 // rejected instead of being rendered and reparsed, allowing callers to keep a
 // compatibility fallback while the dedicated statement lowerers are added.
 func goBlockNode(block *BlockStmt, rethrowName string) (*ast.BlockStmt, error) {
-	if block == nil {
-		return &ast.BlockStmt{}, nil
-	}
-	result := &ast.BlockStmt{}
-	for _, statement := range block.Statements {
-		lowered, err := goStmtNode(statement, rethrowName)
-		if err != nil {
-			return nil, err
-		}
-		result.List = append(result.List, lowered...)
-	}
-	return result, nil
+	return lowerGoBlock(block, func(statement Stmt) ([]ast.Stmt, error) {
+		return goStmtNode(statement, rethrowName)
+	}, nil)
 }
 
 // goExceptionBlockNode is the exception-aware counterpart to goBlockNode.
 // Returns are represented as the runtime's control-transfer panic so a
 // generated finally/defer wrapper cannot swallow the original function return.
 func goExceptionBlockNode(block *BlockStmt, rethrowName string) (*ast.BlockStmt, error) {
-	if block == nil {
-		return &ast.BlockStmt{}, nil
-	}
+	return lowerGoBlock(block, func(statement Stmt) ([]ast.Stmt, error) {
+		return goExceptionStmtNode(statement, rethrowName)
+	}, nil)
+}
+
+func lowerGoBlock(block *BlockStmt, lower func(Stmt) ([]ast.Stmt, error), marker func(Stmt) ast.Stmt) (*ast.BlockStmt, error) {
 	result := &ast.BlockStmt{}
+	if block == nil {
+		return result, nil
+	}
+	var labels []*ast.LabeledStmt
 	for _, statement := range block.Statements {
-		lowered, err := goExceptionStmtNode(statement, rethrowName)
+		if marker != nil {
+			if position := marker(statement); position != nil {
+				result.List = append(result.List, position)
+			}
+		}
+		if label, ok := statement.(*LabelStmt); ok {
+			labels = append(labels, &ast.LabeledStmt{Label: ast.NewIdent(label.Name)})
+			continue
+		}
+		lowered, err := lower(statement)
 		if err != nil {
 			return nil, err
 		}
+		if len(lowered) == 0 {
+			continue
+		}
+		lowered[0] = attachGoLabels(labels, lowered[0])
+		labels = labels[:0]
 		result.List = append(result.List, lowered...)
 	}
+	if len(labels) != 0 {
+		result.List = append(result.List, attachGoLabels(labels, &ast.EmptyStmt{}))
+	}
 	return result, nil
+}
+
+func attachGoLabels(labels []*ast.LabeledStmt, statement ast.Stmt) ast.Stmt {
+	for index := len(labels) - 1; index >= 0; index-- {
+		labels[index].Stmt = statement
+		statement = labels[index]
+	}
+	return statement
 }
 
 func goExceptionStmtNode(statement Stmt, rethrowName string) ([]ast.Stmt, error) {

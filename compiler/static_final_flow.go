@@ -33,26 +33,65 @@ func joinFinalStates(states ...finalState) finalState {
 	return merged
 }
 
+// The empty label is a transfer to the nearest eligible loop or switch.
+type finalBranches map[string]finalState
+
+func (branches *finalBranches) join(other finalBranches) {
+	for label, state := range other {
+		if *branches == nil {
+			*branches = finalBranches{}
+		}
+		(*branches)[label] = joinFinalStates((*branches)[label], state)
+	}
+}
+
+func (branches finalBranches) take(label string) finalState {
+	state := branches[""]
+	delete(branches, "")
+	if label != "" {
+		state = joinFinalStates(state, branches[label])
+		delete(branches, label)
+	}
+	return state
+}
+
 type finalFlow struct {
 	normal    finalState
-	breaks    finalState
-	continues finalState
+	breaks    finalBranches
+	continues finalBranches
 	falls     finalState
 	throws    finalState
 }
 
 func (flow *finalFlow) join(other finalFlow) {
 	flow.normal = joinFinalStates(flow.normal, other.normal)
-	flow.breaks = joinFinalStates(flow.breaks, other.breaks)
-	flow.continues = joinFinalStates(flow.continues, other.continues)
+	flow.breaks.join(other.breaks)
+	flow.continues.join(other.continues)
 	flow.falls = joinFinalStates(flow.falls, other.falls)
 	flow.throws = joinFinalStates(flow.throws, other.throws)
 }
 
+func (flow finalFlow) allPaths(initial finalState) finalState {
+	states := []finalState{initial, flow.normal, flow.throws, flow.falls}
+	for _, state := range flow.breaks {
+		states = append(states, state)
+	}
+	for _, state := range flow.continues {
+		states = append(states, state)
+	}
+	return joinFinalStates(states...)
+}
+
+type finalBranchTarget struct {
+	label string
+	loop  bool
+}
+
 type staticFinalAnalyzer struct {
-	class  *ClassDecl
-	blanks map[string]*Field
-	err    error
+	class   *ClassDecl
+	blanks  map[string]*Field
+	targets []finalBranchTarget
+	err     error
 }
 
 func validateStaticFinalFields(class *ClassDecl) error {
@@ -128,8 +167,14 @@ func (analyzer *staticFinalAnalyzer) block(block *BlockStmt, parent *fieldLocalS
 		return flow
 	}
 	scope := newFieldLocalScope(parent)
+	label := ""
 	for _, statement := range block.Statements {
-		next := analyzer.statement(statement, scope, flow.normal)
+		if declaration, ok := statement.(*LabelStmt); ok {
+			label = declaration.Name
+			continue
+		}
+		next := analyzer.statement(statement, scope, flow.normal, label)
+		label = ""
 		flow.normal = nil
 		flow.join(next)
 		if flow.normal == nil || analyzer.err != nil {
@@ -139,7 +184,7 @@ func (analyzer *staticFinalAnalyzer) block(block *BlockStmt, parent *fieldLocalS
 	return flow
 }
 
-func (analyzer *staticFinalAnalyzer) statement(statement Stmt, scope *fieldLocalScope, state finalState) finalFlow {
+func (analyzer *staticFinalAnalyzer) statement(statement Stmt, scope *fieldLocalScope, state finalState, label string) finalFlow {
 	if statement == nil || isNilStmt(statement) || state == nil || analyzer.err != nil {
 		return finalFlow{normal: state}
 	}
@@ -152,29 +197,19 @@ func (analyzer *staticFinalAnalyzer) statement(statement Stmt, scope *fieldLocal
 		onTrue, onFalse := analyzer.condition(node.Condition, nested, state)
 		then := analyzer.block(node.Body, nested, onTrue)
 		if node.ElseIf != nil {
-			then.join(analyzer.statement(node.ElseIf, nested, onFalse))
+			then.join(analyzer.statement(node.ElseIf, nested, onFalse, ""))
 		} else {
 			then.join(analyzer.block(node.Else, nested, onFalse))
 		}
 		return then
 	case *ForStmt:
-		return analyzer.loop(node, scope, state)
+		return analyzer.loop(node, scope, state, label)
 	case *SwitchStmt:
-		return analyzer.switchFlow(node, scope, state)
+		return analyzer.switchFlow(node, scope, state, label)
 	case *TryStmt:
 		return analyzer.tryFlow(node, scope, state)
 	case *BranchStmt:
-		if len(node.Target) != 0 || node.Keyword == "goto" {
-			analyzer.problem(node.Span(), "labeled branches in static final initialization are not supported")
-		}
-		switch node.Keyword {
-		case "break":
-			return finalFlow{breaks: state}
-		case "continue":
-			return finalFlow{continues: state}
-		case "fallthrough":
-			return finalFlow{falls: state}
-		}
+		return analyzer.branch(node, state)
 	case *ThrowStmt:
 		analyzer.visitor(state).expression(node.Value, scope, false)
 		return finalFlow{throws: state}
@@ -186,6 +221,42 @@ func (analyzer *staticFinalAnalyzer) statement(statement Stmt, scope *fieldLocal
 	}
 	analyzer.visitor(state).statement(statement, scope)
 	return finalFlow{normal: state}
+}
+
+func (analyzer *staticFinalAnalyzer) branch(node *BranchStmt, state finalState) finalFlow {
+	switch node.Keyword {
+	case "fallthrough":
+		return finalFlow{falls: state}
+	case "goto":
+		analyzer.problem(node.Span(), "goto in static final initialization is not supported")
+		return finalFlow{}
+	}
+
+	label := ""
+	if len(node.Target) != 0 {
+		label = node.Target[0].Text
+	}
+	for index := len(analyzer.targets) - 1; index >= 0; index-- {
+		target := analyzer.targets[index]
+		if label != "" && target.label != label {
+			continue
+		}
+		if node.Keyword == "break" {
+			return finalFlow{breaks: finalBranches{label: state}}
+		}
+		if node.Keyword == "continue" && target.loop {
+			return finalFlow{continues: finalBranches{label: state}}
+		}
+		if label != "" {
+			break
+		}
+	}
+	if label == "" {
+		analyzer.problem(node.Span(), "no target for %s in static final initialization", node.Keyword)
+	} else {
+		analyzer.problem(node.Span(), "invalid %s target %s in static final initialization", node.Keyword, label)
+	}
+	return finalFlow{}
 }
 
 func (analyzer *staticFinalAnalyzer) condition(expression ExprNode, scope *fieldLocalScope, state finalState) (finalState, finalState) {
@@ -224,7 +295,10 @@ func (analyzer *staticFinalAnalyzer) condition(expression ExprNode, scope *field
 	return state, maps.Clone(state)
 }
 
-func (analyzer *staticFinalAnalyzer) loop(node *ForStmt, scope *fieldLocalScope, state finalState) finalFlow {
+func (analyzer *staticFinalAnalyzer) loop(node *ForStmt, scope *fieldLocalScope, state finalState, label string) finalFlow {
+	analyzer.targets = append(analyzer.targets, finalBranchTarget{label: label, loop: true})
+	defer func() { analyzer.targets = analyzer.targets[:len(analyzer.targets)-1] }()
+
 	nested := newFieldLocalScope(scope)
 	analyzer.visitor(state).expression(node.Init, nested, false)
 	analyzer.visitor(state).expression(node.RangeExpr, nested, false)
@@ -239,17 +313,21 @@ func (analyzer *staticFinalAnalyzer) loop(node *ForStmt, scope *fieldLocalScope,
 			analyzer.visitor(onTrue).assignment(node.RangeKey, nil, node.RangeOperator, nested)
 		}
 		body := analyzer.block(node.Body, nested, onTrue)
-		repeat := joinFinalStates(body.normal, body.continues)
+		repeat := joinFinalStates(body.normal, body.continues.take(label))
 		analyzer.visitor(repeat).expression(node.Post, nested, false)
 		next := joinFinalStates(initial, repeat)
 		if analyzer.err != nil || maps.Equal(header, next) {
-			return finalFlow{normal: joinFinalStates(onFalse, body.breaks), throws: body.throws}
+			body.normal = joinFinalStates(onFalse, body.breaks.take(label))
+			return body
 		}
 		header = next
 	}
 }
 
-func (analyzer *staticFinalAnalyzer) switchFlow(node *SwitchStmt, scope *fieldLocalScope, state finalState) finalFlow {
+func (analyzer *staticFinalAnalyzer) switchFlow(node *SwitchStmt, scope *fieldLocalScope, state finalState, label string) finalFlow {
+	analyzer.targets = append(analyzer.targets, finalBranchTarget{label: label})
+	defer func() { analyzer.targets = analyzer.targets[:len(analyzer.targets)-1] }()
+
 	nested := newFieldLocalScope(scope)
 	analyzer.visitor(state).expression(node.Init, nested, false)
 	analyzer.visitor(state).expression(node.Tag, nested, false)
@@ -279,8 +357,7 @@ func (analyzer *staticFinalAnalyzer) switchFlow(node *SwitchStmt, scope *fieldLo
 	if !defaultCase && !node.Select {
 		exits.normal = joinFinalStates(exits.normal, state)
 	}
-	exits.normal = joinFinalStates(exits.normal, exits.breaks)
-	exits.breaks = nil
+	exits.normal = joinFinalStates(exits.normal, exits.breaks.take(label))
 	return exits
 }
 
@@ -288,7 +365,7 @@ func (analyzer *staticFinalAnalyzer) tryFlow(node *TryStmt, scope *fieldLocalSco
 	body := analyzer.block(node.Body, scope, state)
 	// A catch or finally starts with the assignments known before the try,
 	// and must also allow for any assignments before an abrupt exit.
-	catchState := joinFinalStates(state, body.normal, body.throws, body.breaks, body.continues, body.falls)
+	catchState := body.allPaths(state)
 	for _, clause := range node.Catches {
 		nested := newFieldLocalScope(scope)
 		nested.names[clause.Binding] = true
@@ -297,7 +374,7 @@ func (analyzer *staticFinalAnalyzer) tryFlow(node *TryStmt, scope *fieldLocalSco
 	if node.Finally == nil {
 		return body
 	}
-	cleanupState := joinFinalStates(catchState, body.normal, body.throws, body.breaks, body.continues, body.falls)
+	cleanupState := body.allPaths(catchState)
 	cleanup := analyzer.block(node.Finally, scope, cleanupState)
 	if cleanup.normal == nil {
 		return cleanup
@@ -315,8 +392,12 @@ func (analyzer *staticFinalAnalyzer) tryFlow(node *TryStmt, scope *fieldLocalSco
 		return result
 	}
 	body.normal = apply(body.normal)
-	body.breaks = apply(body.breaks)
-	body.continues = apply(body.continues)
+	for label, state := range body.breaks {
+		body.breaks[label] = apply(state)
+	}
+	for label, state := range body.continues {
+		body.continues[label] = apply(state)
+	}
 	body.falls = apply(body.falls)
 	body.throws = apply(body.throws)
 	cleanup.normal = nil

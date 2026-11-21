@@ -657,7 +657,8 @@ during class initialization. A declaration without an initializer is a blank
 final. Assign it by simple name in a static initializer of the declaring class.
 Every path that completes class initialization must assign each blank final
 exactly once. The compiler checks reads and assignments across branches,
-loops, switch cases, and exception handling.
+loops, switch cases, and exception handling. Labeled breaks can exit an
+enclosing loop or switch, and labeled continues resume an enclosing loop.
 
 ```go
 class Settings {
@@ -679,8 +680,10 @@ The field is read-only after initialization. A caller can still use or mutate
 the object held by a final reference according to its type.
 
 The `static const` syntax covers compile-time constants. The `static final`
-syntax always uses runtime initialization. Java-specific constant folding,
-labeled flow in blank-final analysis, and interface initialization remain open.
+syntax always uses runtime initialization. Java-specific constant folding and interface initialization remain open.
+Blank-final analysis currently requires structured branches. Transfers across
+an exception handling boundary and Go `goto` in blank-final initialization
+remain open.
 
 ## Static field reflection
 

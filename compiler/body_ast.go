@@ -518,6 +518,20 @@ func (parser *bodyParser) parseStatement() (*statementDraft, error) {
 	}
 	parser.index = start
 
+	// A label precedes another statement. Keep both nodes even when the
+	// labeled statement starts on the same line.
+	if parser.tokens[start].Kind == TokenIdentifier {
+		colon := start + 1
+		for colon < len(parser.tokens) && parser.tokens[colon].Kind == TokenComment &&
+			parser.tokens[colon].Span.Line == parser.tokens[start].Span.Line {
+			colon++
+		}
+		if parser.isPunctuation(colon, ':') && parser.tokens[colon].Span.Line == parser.tokens[start].Span.Line {
+			parser.index = colon + 1
+			return newStatementDraft(parser.tokens[start:parser.index], nil, nil), nil
+		}
+	}
+
 	parenDepth := 0
 	bracketDepth := 0
 	braceDepth := 0

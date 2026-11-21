@@ -1313,24 +1313,9 @@ func lowerExceptionPromotionStatement(statement Stmt, context constructorContext
 // It is separate from goExceptionBlockNode because nested try statements need
 // the semantic context in order to recursively produce their wrapper AST.
 func lowerExceptionGoBlockNode(block *BlockStmt, context constructorContext, rethrowName string) (*ast.BlockStmt, error) {
-	if block == nil {
-		return &ast.BlockStmt{}, nil
-	}
-	result := &ast.BlockStmt{}
-	for _, statement := range block.Statements {
-		sourceLine := exceptionStatementSourceLine(statement)
-		lowered, err := lowerExceptionGoStmtNode(statement, context, rethrowName)
-		if err != nil {
-			return nil, err
-		}
-		if _, isCase := statement.(*CaseStmt); !isCase {
-			if marker := exceptionSourceLineMarker(context, sourceLine); marker != nil {
-				result.List = append(result.List, marker)
-			}
-		}
-		result.List = append(result.List, lowered...)
-	}
-	return result, nil
+	return lowerGoBlock(block, func(statement Stmt) ([]ast.Stmt, error) {
+		return lowerExceptionGoStmtNode(statement, context, rethrowName)
+	}, exceptionBlockStatementMarker(context))
 }
 
 // lowerFunctionGoBlockNode lowers a complete function body while preserving
@@ -1338,24 +1323,18 @@ func lowerExceptionGoBlockNode(block *BlockStmt, context constructorContext, ret
 // and is lowered through lowerASTTryDirectNode; returns outside try remain
 // ordinary Go return statements.
 func lowerFunctionGoBlockNode(block *BlockStmt, context constructorContext, rethrowName string) (*ast.BlockStmt, error) {
-	if block == nil {
-		return &ast.BlockStmt{}, nil
-	}
-	result := &ast.BlockStmt{}
-	for _, statement := range block.Statements {
-		sourceLine := exceptionStatementSourceLine(statement)
-		lowered, err := lowerFunctionGoStmtNode(statement, context, rethrowName)
-		if err != nil {
-			return nil, err
+	return lowerGoBlock(block, func(statement Stmt) ([]ast.Stmt, error) {
+		return lowerFunctionGoStmtNode(statement, context, rethrowName)
+	}, exceptionBlockStatementMarker(context))
+}
+
+func exceptionBlockStatementMarker(context constructorContext) func(Stmt) ast.Stmt {
+	return func(statement Stmt) ast.Stmt {
+		if _, isCase := statement.(*CaseStmt); isCase {
+			return nil
 		}
-		if _, isCase := statement.(*CaseStmt); !isCase {
-			if marker := exceptionSourceLineMarker(context, sourceLine); marker != nil {
-				result.List = append(result.List, marker)
-			}
-		}
-		result.List = append(result.List, lowered...)
+		return exceptionSourceLineMarker(context, exceptionStatementSourceLine(statement))
 	}
-	return result, nil
 }
 
 func lowerOrAssignmentNode(statement *AssignmentStmt, context constructorContext) ([]ast.Stmt, error) {
