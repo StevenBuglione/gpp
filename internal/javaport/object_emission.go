@@ -10,6 +10,7 @@ import (
 
 func (program *javaObjectProgram) emitClass(out *strings.Builder, class *javaObjectClass) error {
 	name := class.storageName(class.declaration.Name)
+	emitJavaPermits(out, class.declaration, class.storageName(javaPermitsAPI(class.declaration.Name)))
 	if class.hasAssertions {
 		program.runtime = true
 		fmt.Fprintf(out, "\nvar %s javart.AssertionStatus\n", class.assertionStatus().storage)
@@ -149,37 +150,39 @@ func (ctx javaObjectContext) emitConstructor(out *strings.Builder, method *javaO
 	declaration := method.declaration
 	parameters, arguments := ctx.program.objectParameterList(declaration.Parameters)
 	ctx.arguments = objectParameterNames(declaration.Parameters)
-	allocator := ctx.class.storageName(method.allocatorName())
-	fmt.Fprintf(out, "\nfunc %s(%s) *%s {\n", allocator, parameters, name)
-	if guard := ctx.program.classInitialization(ctx.class); guard != "" {
-		fmt.Fprintf(out, "\t%s\n", guard)
-	}
-	fmt.Fprintf(out, "\tthis := new(%s)\n", name)
-	if ctx.class.parent != nil {
-		out.WriteString("\tthis.GppJavaBindOwner(this)\n")
-	}
-	// Attach the most-derived implementations before entering any Java constructor.
-	for _, methodName := range slices.Sorted(maps.Keys(ctx.class.virtual)) {
-		implementation := ctx.class.virtual[methodName]
-		slot := implementation.slot
-		if implementation == slot {
-			continue
+	if !ctx.class.isAbstract() {
+		allocator := ctx.class.storageName(method.allocatorName())
+		fmt.Fprintf(out, "\nfunc %s(%s) *%s {\n", allocator, parameters, name)
+		if guard := ctx.program.classInitialization(ctx.class); guard != "" {
+			fmt.Fprintf(out, "\t%s\n", guard)
 		}
-		receiver, _ := ctx.class.memberReceiver(slot.class)
-		owner, _ := ctx.class.memberReceiver(implementation.class)
-		bodyName := implementation.internal
-		if implementation.class.file.Package != ctx.class.file.Package {
-			bodyName = implementation.bridgeName("Body")
+		fmt.Fprintf(out, "\tthis := new(%s)\n", name)
+		if ctx.class.parent != nil {
+			out.WriteString("\tthis.GppJavaBindOwner(this)\n")
 		}
-		if slot.class.file.Package != ctx.class.file.Package {
-			fmt.Fprintf(out, "\t%s.%s(%s.%s)\n", receiver, slot.bridgeName("Dispatch"), owner, bodyName)
-		} else {
-			fmt.Fprintf(out, "\t%s.javaDispatch%s = %s.%s\n", receiver, slot.goName, owner, bodyName)
+		// Attach the most-derived implementations before entering any Java constructor.
+		for _, methodName := range slices.Sorted(maps.Keys(ctx.class.virtual)) {
+			implementation := ctx.class.virtual[methodName]
+			slot := implementation.slot
+			if implementation == slot {
+				continue
+			}
+			receiver, _ := ctx.class.memberReceiver(slot.class)
+			owner, _ := ctx.class.memberReceiver(implementation.class)
+			bodyName := implementation.internal
+			if implementation.class.file.Package != ctx.class.file.Package {
+				bodyName = implementation.bridgeName("Body")
+			}
+			if slot.class.file.Package != ctx.class.file.Package {
+				fmt.Fprintf(out, "\t%s.%s(%s.%s)\n", receiver, slot.bridgeName("Dispatch"), owner, bodyName)
+			} else {
+				fmt.Fprintf(out, "\t%s.javaDispatch%s = %s.%s\n", receiver, slot.goName, owner, bodyName)
+			}
 		}
-	}
-	fmt.Fprintf(out, "\tthis.%s(%s)\n\treturn this\n}\n", method.internal, arguments)
-	if method.hasErrorAdapter() {
-		ctx.emitErrorAdapter(out, "", ctx.class.storageName(method.errorAdapterName()), parameters, "*"+name, allocator+"("+arguments+")")
+		fmt.Fprintf(out, "\tthis.%s(%s)\n\treturn this\n}\n", method.internal, arguments)
+		if method.hasErrorAdapter() {
+			ctx.emitErrorAdapter(out, "", ctx.class.storageName(method.errorAdapterName()), parameters, "*"+name, allocator+"("+arguments+")")
+		}
 	}
 	if method.crossPackageInit {
 		fmt.Fprintf(out, "\nfunc (this *%s) %s(%s) { this.%s(%s) }\n", name,
@@ -258,6 +261,8 @@ func (ctx javaObjectContext) emitMethod(out *strings.Builder, method *javaObject
 	}
 	if method.defaultMethod != nil {
 		fmt.Fprintf(out, "\t%s%s\n", returnKeyword(result), ctx.defaultCall(method.defaultMethod, "this", arguments))
+	} else if declaration.Body == nil {
+		fmt.Fprintf(out, "\tpanic(%q)\n", "abstract Java method "+declaration.Symbol)
 	} else {
 		if err := ctx.emitPatternStatements(out, declaration.Body, declaration.Result); err != nil {
 			return err

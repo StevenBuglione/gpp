@@ -222,12 +222,14 @@ func (declaration *TemplateDecl) Span() Span {
 
 type ClassDecl struct {
 	Name                   string
+	InheritanceModifier    string
 	Owner                  *File
 	TypeParamsAST          []TypeParameterNode
 	Doc                    string
 	SourceFile             string
 	SourceLine             int
 	ParentAST              []TypeNode
+	PermitsAST             []TypeNode
 	Annotations            []AnnotationUse
 	SerializationQualifier string
 	Fields                 []Field
@@ -252,6 +254,20 @@ func (declaration *ClassDecl) Span() Span {
 // of relying on a duplicate string field in ClassDecl.
 func (declaration *ClassDecl) ParentNames() []string {
 	return classParentNames(declaration)
+}
+
+// PermittedNames returns the explicitly permitted direct subclasses.
+func (declaration *ClassDecl) PermittedNames() []string {
+	if declaration == nil || len(declaration.PermitsAST) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(declaration.PermitsAST))
+	for _, permitted := range declaration.PermitsAST {
+		if name, err := typeNodeSource(permitted); err == nil && strings.TrimSpace(name) != "" {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 type EnumDecl struct {

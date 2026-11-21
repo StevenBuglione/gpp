@@ -88,6 +88,14 @@ func prepareJavaObjects(files []SourceFile) (*javaObjectProgram, error) {
 		interfaces: map[string]*javaInterface{}, interfaceMethods: map[string]*javaInterfaceMethod{},
 	}
 	var classes []*javaObjectClass
+	permitted := map[string]bool{}
+	for _, file := range files {
+		for _, declaration := range file.Declarations {
+			for _, subtype := range declaration.PermittedSubclasses {
+				permitted[subtype] = true
+			}
+		}
+	}
 	for _, file := range files {
 		if file.Module != nil || len(file.Declarations) == 0 {
 			return nil, fmt.Errorf("%s: object emission requires a Java source file with classes", file.Path)
@@ -100,7 +108,7 @@ func prepareJavaObjects(files []SourceFile) (*javaObjectProgram, error) {
 				continue
 			}
 			if declaration.Kind == "INTERFACE" {
-				if err := program.addInterface(file, declaration); err != nil {
+				if err := program.addInterface(file, declaration, permitted[declaration.Symbol]); err != nil {
 					return nil, unsupportedSource(file, declaration, err.Error())
 				}
 				continue
@@ -108,8 +116,9 @@ func prepareJavaObjects(files []SourceFile) (*javaObjectProgram, error) {
 			if declaration.Kind != "CLASS" && declaration.Kind != "RECORD" {
 				continue
 			}
-			if !token.IsExported(declaration.Name) || !token.IsIdentifier(declaration.Name) ||
-				!hasOnlyModifiers(declaration, "PUBLIC", "FINAL") || !slices.Contains(declaration.Modifiers, "PUBLIC") ||
+			visible := slices.Contains(declaration.Modifiers, "PUBLIC") || permitted[declaration.Symbol] || javaIsSealed(declaration)
+			if !token.IsExported(declaration.Name) || !token.IsIdentifier(declaration.Name) || !visible ||
+				!hasOnlyModifiers(declaration, "PUBLIC", "FINAL", "ABSTRACT", "SEALED", "NON_SEALED") ||
 				!onlySourceAnnotations(declaration) || declaration.HasTypeParams {
 				return nil, unsupportedSource(file, declaration, "expected a public non-generic class with at most one superclass")
 			}
@@ -121,6 +130,9 @@ func prepareJavaObjects(files []SourceFile) (*javaObjectProgram, error) {
 			program.classes[declaration.Symbol] = class
 			program.exports[file.Package][declaration.Name] = true
 		}
+	}
+	if err := program.validateSealedTypes(); err != nil {
+		return nil, err
 	}
 	for _, file := range files {
 		for _, declaration := range file.Declarations {
@@ -244,8 +256,10 @@ func (program *javaObjectProgram) addMember(class *javaObjectClass, declaration 
 }
 
 func (program *javaObjectProgram) addMethod(class *javaObjectClass, declaration Occurrence) error {
-	if declaration.HasTypeParams || declaration.Body == nil ||
-		!hasOnlyModifiers(declaration, "PUBLIC", "PRIVATE", "PROTECTED", "FINAL") {
+	abstract := slices.Contains(declaration.Modifiers, "ABSTRACT")
+	if declaration.HasTypeParams || (declaration.Body == nil) != abstract ||
+		(abstract && (!class.isAbstract() || declaration.Name == "<init>")) ||
+		!hasOnlyModifiers(declaration, "PUBLIC", "PRIVATE", "PROTECTED", "FINAL", "ABSTRACT") {
 		return fmt.Errorf("unsupported constructor or method modifiers, body, or type parameters")
 	}
 	for _, parameter := range declaration.Parameters {
@@ -266,7 +280,7 @@ func (program *javaObjectProgram) addMethod(class *javaObjectClass, declaration 
 				return fmt.Errorf("colliding Go constructor suffix %q", suffix)
 			}
 		}
-		if method.public {
+		if method.public && !class.isAbstract() {
 			exports := program.exports[class.file.Package]
 			if exports[method.goName] {
 				return fmt.Errorf("duplicate exported Go constructor %s", method.goName)
@@ -364,6 +378,14 @@ func (program *javaObjectProgram) layoutClass(class *javaObjectClass) error {
 	}
 	if err := program.completeInterfaceMethods(class); err != nil {
 		return unsupportedSource(class.file, declaration, err.Error())
+	}
+	if !class.isAbstract() {
+		for _, name := range slices.Sorted(maps.Keys(class.virtual)) {
+			method := class.virtual[name]
+			if method.declaration.Body == nil && method.defaultMethod == nil {
+				return unsupportedSource(class.file, declaration, "missing implementation of abstract Java method "+name)
+			}
+		}
 	}
 	if class.closeable && class.virtual["GppAutoCloseable"] != nil {
 		return unsupportedSource(class.file, declaration, "Go AutoCloseable marker collides with method GppAutoCloseable")

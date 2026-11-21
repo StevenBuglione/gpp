@@ -770,6 +770,12 @@ class JavaSourceAnalysis {
                     ",\"hasTypeParams\":" + !method.getTypeParameters().isEmpty();
             }
             if (element instanceof TypeElement type) {
+                if (type.getModifiers().contains(Modifier.SEALED)) {
+                    var permitted = type.getPermittedSubclasses().stream()
+                        .map(types::asElement).filter(TypeElement.class::isInstance)
+                        .map(this::symbol).map(JavaSourceAnalysis::quote).collect(Collectors.joining(","));
+                    result += ",\"permittedSubclasses\":[" + permitted + "]";
+                }
                 if (type.getKind() == ElementKind.RECORD) {
                     var components = type.getRecordComponents().stream().map(component ->
                         "{\"name\":" + quote(component.getSimpleName().toString()) +

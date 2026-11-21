@@ -61,6 +61,9 @@ func (ctx javaObjectContext) allocateObject(expression *JavaExpression) (string,
 	if constructor == nil || constructor.declaration.Name != "<init>" {
 		return "", fmt.Errorf("unsupported Java allocation %s", expression.Symbol)
 	}
+	if constructor.class.isAbstract() {
+		return "", fmt.Errorf("cannot instantiate abstract Java class %s", constructor.class.declaration.Symbol)
+	}
 	if guard := ctx.program.classInitialization(constructor.class); guard != "" {
 		return ctx.orderedStaticInvocation(expression, constructor, " "+ctx.program.objectGoType(expression.Type),
 			"\t"+guard+"\n", ctx.program.classReference(constructor.class, constructor.allocatorName()))

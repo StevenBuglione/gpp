@@ -114,7 +114,7 @@ func ParseFile(name, src string) (*File, error) {
 			})
 			pos = end
 
-		case keywordAt(src, pos, "class"):
+		case classDeclarationAt(src, pos):
 			class, end, err := parseClass(src, pos)
 			if err != nil {
 				return nil, diagnosticAt(name, sourceSpan(src, pos, pos), err)
@@ -1062,8 +1062,29 @@ func isGoKeyword(name string) bool {
 	}
 }
 
+func classDeclarationStart(src string, start int) (int, string, bool) {
+	if keywordAt(src, start, "class") {
+		return start, "", true
+	}
+	for _, modifier := range []string{"sealed", "non-sealed", "final"} {
+		if keywordAt(src, start, modifier) {
+			pos := skipClassHeaderSpace(src, start+len(modifier))
+			if keywordAt(src, pos, "class") {
+				return pos, modifier, true
+			}
+		}
+	}
+	return 0, "", false
+}
+
+func classDeclarationAt(src string, pos int) bool {
+	_, _, ok := classDeclarationStart(src, pos)
+	return ok
+}
+
 func parseClass(src string, start int) (*ClassDecl, int, error) {
-	pos := start + len("class")
+	classStart, modifier, _ := classDeclarationStart(src, start)
+	pos := classStart + len("class")
 	pos = skipClassHeaderSpace(src, pos)
 
 	name, n := readIdent(src[pos:])
@@ -1084,8 +1105,9 @@ func parseClass(src string, start int) (*ClassDecl, int, error) {
 	}
 
 	class := &ClassDecl{
-		Name:          name,
-		TypeParamsAST: parseTypeParameterNodes(typeParams),
+		Name:                name,
+		InheritanceModifier: modifier,
+		TypeParamsAST:       parseTypeParameterNodes(typeParams),
 	}
 	if typeParams != "" && len(class.TypeParamsAST) == 0 {
 		return nil, 0, fmt.Errorf("class %s has invalid type parameters", name)
@@ -1118,6 +1140,25 @@ func parseClass(src string, start int) (*ClassDecl, int, error) {
 	}
 
 	pos = skipClassHeaderSpace(src, pos)
+	if keywordAt(src, pos, "permits") {
+		if modifier != "sealed" {
+			return nil, 0, fmt.Errorf("only a sealed class can declare permits")
+		}
+		pos += len("permits")
+		for {
+			pos = skipClassHeaderSpace(src, pos)
+			permitted, length := readQualifiedIdent(src[pos:])
+			if length == 0 {
+				return nil, 0, fmt.Errorf("class %s requires a subclass name in permits", name)
+			}
+			class.PermitsAST = append(class.PermitsAST, parseTypeText(permitted))
+			pos = skipClassHeaderSpace(src, pos+length)
+			if pos >= len(src) || src[pos] != ',' {
+				break
+			}
+			pos++
+		}
+	}
 	annotations, next, err := parseOptionalAnnotationUses(src, pos)
 	if err != nil {
 		return nil, 0, err
@@ -2232,7 +2273,7 @@ func findNextExtension(src string, start int) int {
 		if lineStart && braceDepth == 0 {
 			p := skipHorizontal(src, i)
 
-			if keywordAt(src, p, "class") || keywordAt(src, p, "enum") || keywordAt(src, p, "extend") ||
+			if classDeclarationAt(src, p) || keywordAt(src, p, "enum") || keywordAt(src, p, "extend") ||
 				keywordAt(src, p, "annotation") || keywordAt(src, p, "embed") || keywordAt(src, p, "template") || keywordAt(src, p, "package") ||
 				(p > start && topLevelDeclarationBoundary(src, start, p)) {
 				boundary := leadingCommentStart(src, start, p)
@@ -2443,7 +2484,10 @@ func leadingDocComments(src string, pos int) (string, int) {
 }
 
 func documentationTargetAt(src string, pos int) bool {
-	for _, keyword := range []string{"package", "import", "func", "const", "var", "let", "type", "struct", "class", "enum", "extend", "annotation", "embed", "template"} {
+	if classDeclarationAt(src, pos) {
+		return true
+	}
+	for _, keyword := range []string{"package", "import", "func", "const", "var", "let", "type", "struct", "enum", "extend", "annotation", "embed", "template"} {
 		if keywordAt(src, pos, keyword) {
 			return true
 		}

@@ -688,9 +688,15 @@ func goFunctionSignature(function *ast.FuncDecl) string {
 
 func classSource(class *ClassDecl) string {
 	result := "class " + class.Name
+	if class.InheritanceModifier != "" {
+		result = class.InheritanceModifier + " " + result
+	}
 	parents := classParentNames(class)
 	if len(parents) > 0 {
 		result += " : " + strings.Join(parents, ", ")
+	}
+	if permitted := class.PermittedNames(); len(permitted) > 0 {
+		result += " permits " + strings.Join(permitted, ", ")
 	}
 	return result
 }

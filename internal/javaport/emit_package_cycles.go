@@ -58,6 +58,7 @@ func (program javaObjectProgram) emitPackageFacade(name, storage string) (emitte
 		if iface.file.Package != name {
 			continue
 		}
+		emitJavaPermits(&source, iface.declaration, javaPermitsAPI(iface.declaration.Name))
 		publicName := iface.declaration.Name
 		fmt.Fprintf(&source, "\ntype %s = %s\n", publicName,
 			program.qualify(storage, iface.storageName(publicName)))
@@ -79,6 +80,7 @@ func (program javaObjectProgram) emitPackageFacade(name, storage string) (emitte
 			continue
 		}
 		publicName := class.declaration.Name
+		emitJavaPermits(&source, class.declaration, javaPermitsAPI(publicName))
 		fmt.Fprintf(&source, "\ntype %s = %s\n", publicName,
 			program.qualify(storage, class.storageName(publicName)))
 		for _, field := range class.fields {
@@ -95,7 +97,7 @@ func (program javaObjectProgram) emitPackageFacade(name, storage string) (emitte
 			}
 		}
 		for _, constructor := range class.constructors {
-			if !constructor.public {
+			if !constructor.public || class.isAbstract() {
 				continue
 			}
 			parameters, arguments := program.objectParameterList(constructor.declaration.Parameters)

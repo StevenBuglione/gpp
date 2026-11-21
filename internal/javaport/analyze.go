@@ -118,6 +118,7 @@ type Occurrence struct {
 	Result                   string           `json:"result,omitempty"`
 	Thrown                   []string         `json:"thrown,omitempty"`
 	Supertypes               []string         `json:"supertypes,omitempty"`
+	PermittedSubclasses      []string         `json:"permittedSubclasses,omitempty"`
 	HasTypeParams            bool             `json:"hasTypeParams,omitempty"`
 	Constant                 *string          `json:"constant,omitempty"`
 	ConstantUTF16LE          *string          `json:"constantUtf16LE,omitempty"`

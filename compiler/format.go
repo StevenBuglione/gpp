@@ -877,11 +877,12 @@ func canonicalizeLambdaArrowSpacing(line string) string {
 }
 
 func canonicalizeClassHeaderSpacing(line string) string {
-	if !strings.HasPrefix(line, "class ") {
+	classStart, _, ok := classDeclarationStart(line, 0)
+	if !ok {
 		return line
 	}
 
-	nameStart := len("class ")
+	nameStart := skipHorizontal(line, classStart+len("class"))
 	_, nameLength := readIdent(line[nameStart:])
 	if nameLength == 0 {
 		return line

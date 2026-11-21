@@ -323,6 +323,7 @@ func ResolveProgramWithModulePath(program *Program, modulePath string) (*Semanti
 	}
 	sort.Strings(packageNames)
 	staticFields := &staticFieldVisibility{model: model, modulePath: modulePath, enabled: programHasStaticFields(program.Files)}
+	diagnostics = append(diagnostics, validateClassSealing(program, model, staticFields.class)...)
 	for _, packageName := range packageNames {
 		pkg := model.Packages[packageName]
 		templateNames := make([]string, 0, len(pkg.Templates))

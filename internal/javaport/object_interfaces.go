@@ -31,12 +31,13 @@ type javaInterfaceMethod struct {
 	isDefault   bool
 }
 
-func (program *javaObjectProgram) addInterface(file SourceFile, declaration Occurrence) error {
+func (program *javaObjectProgram) addInterface(file SourceFile, declaration Occurrence, permitted bool) error {
 	annotationsSupported := !slices.ContainsFunc(declaration.Annotations, func(annotation Annotation) bool {
 		return annotation.Retention != "SOURCE" && annotation.Type != "java.lang.FunctionalInterface"
 	})
+	visible := slices.Contains(declaration.Modifiers, "PUBLIC") || permitted || javaIsSealed(declaration)
 	if !token.IsExported(declaration.Name) || !token.IsIdentifier(declaration.Name) ||
-		!hasOnlyModifiers(declaration, "PUBLIC", "ABSTRACT") || !slices.Contains(declaration.Modifiers, "PUBLIC") ||
+		!hasOnlyModifiers(declaration, "PUBLIC", "ABSTRACT", "SEALED", "NON_SEALED") || !visible ||
 		!annotationsSupported || declaration.HasTypeParams {
 		return fmt.Errorf("expected a public non-generic Java interface")
 	}
@@ -173,6 +174,9 @@ func sameInterfaceSignature(left, right Occurrence) bool {
 func interfaceMarkers(interfaces map[string]*javaInterface) map[string]bool {
 	markers := map[string]bool{}
 	for _, iface := range interfaces {
+		if javaIsSealed(iface.declaration) {
+			markers[iface.sealedMarker()] = true
+		}
 		if len(iface.declaration.Supertypes) != 0 {
 			markers["Is"+iface.declaration.Name] = true
 		}
@@ -198,6 +202,21 @@ func (program *javaObjectProgram) completeInterfaceMethods(class *javaObjectClas
 		}
 		selected := mostSpecificDefault(contract)
 		if selected == nil {
+			if class.isAbstract() && implementation == nil {
+				declaration := contract[0].declaration
+				_, signature, _ := strings.Cut(declaration.Symbol, "#")
+				declaration.Symbol = class.declaration.Symbol + "#" + signature
+				declaration.Owner = class.declaration.Symbol
+				declaration.Modifiers = []string{"PUBLIC", "ABSTRACT"}
+				declaration.Body = nil
+				if err := program.addMethod(class, declaration); err != nil {
+					return err
+				}
+				if err := class.addVirtualMethod(program.methods[declaration.Symbol]); err != nil {
+					return err
+				}
+				continue
+			}
 			return fmt.Errorf("missing concrete Java interface method %s", name)
 		}
 		if implementation != nil && implementation.defaultMethod == selected {
@@ -266,7 +285,11 @@ func (program *javaObjectProgram) interfaceReference(iface *javaInterface, name 
 
 func (program *javaObjectProgram) emitInterface(out *strings.Builder, iface *javaInterface) error {
 	name := iface.storageName(iface.declaration.Name)
+	emitJavaPermits(out, iface.declaration, iface.storageName(javaPermitsAPI(iface.declaration.Name)))
 	fmt.Fprintf(out, "\ntype %s interface {\n", name)
+	if javaIsSealed(iface.declaration) {
+		fmt.Fprintf(out, "\t%s()\n", iface.sealedMarker())
+	}
 	for _, parent := range iface.declaration.Supertypes {
 		fmt.Fprintf(out, "\t%s\n", program.objectGoType(parent))
 	}
