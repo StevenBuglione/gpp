@@ -2246,10 +2246,10 @@ func emitClass(out *strings.Builder, file *File, class *ClassDecl, context const
 		}
 	}
 
-	// Runtime class descriptors describe concrete field and method types. A
-	// generic declaration has no concrete Go type until instantiated.
+	// Generic class literals can expose declaration metadata before any
+	// instantiation provides concrete instance field and method types.
 	if len(class.TypeParamsAST) != 0 {
-		emitGenericStaticClassDescriptor(out, class, classes, context)
+		emitGenericClassDescriptor(out, class, classes, context)
 		return nil
 	}
 

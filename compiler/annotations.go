@@ -524,8 +524,10 @@ func annotationDescriptorReference(use AnnotationUse, declaration *AnnotationDec
 
 func emitAnnotationDescriptors(out *strings.Builder, file *File, context constructorContext) {
 	names := make([]string, 0, len(context.Annotations))
-	for name := range context.Annotations {
-		names = append(names, name)
+	for name, declaration := range context.Annotations {
+		if declaration.Package == file.Package && name == declaration.Name {
+			names = append(names, name)
+		}
 	}
 	sort.Strings(names)
 	for _, name := range names {
@@ -533,9 +535,13 @@ func emitAnnotationDescriptors(out *strings.Builder, file *File, context constru
 		if declaration.SourceFile != "" && declaration.SourceFile != file.Name {
 			continue
 		}
-		fmt.Fprintf(out, "var GppAnnotation_%s = &GppAnnotationType{Name: %q, FullName: %q}\n", declaration.Name, declaration.Name, annotationFullName(declaration))
+		descriptor := fmt.Sprintf("&GppAnnotationType{Name: %q, FullName: %q}", declaration.Name, annotationFullName(declaration))
+		if declaration.Inherited {
+			descriptor = "__gppInheritedAnnotationType(" + descriptor + ")"
+		}
+		fmt.Fprintf(out, "var GppAnnotation_%s = %s\n", declaration.Name, descriptor)
 	}
-	if len(context.Annotations) > 0 {
+	if len(names) > 0 {
 		out.WriteByte('\n')
 	}
 }

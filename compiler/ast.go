@@ -430,6 +430,7 @@ type AnnotationDecl struct {
 	Name         string
 	ParameterAST []ParameterNode
 	Targets      []AnnotationTarget
+	Inherited    bool
 	Package      string
 	Doc          string
 	SourceFile   string

@@ -260,14 +260,21 @@ func emitStaticFieldAccessors(out *strings.Builder, class *ClassDecl, classes ma
 	}
 }
 
-func emitGenericStaticClassDescriptor(out *strings.Builder, class *ClassDecl, classes map[string]*ClassDecl, context constructorContext) {
-	if len(class.StaticFields) == 0 {
+func emitGenericClassDescriptor(out *strings.Builder, class *ClassDecl, classes map[string]*ClassDecl, context constructorContext) {
+	hasStaticFields := len(class.StaticFields) != 0
+	if !hasStaticFields && len(class.Annotations) == 0 && len(class.ParentAST) == 0 {
 		return
 	}
-	fmt.Fprintf(out, "var Gpp%sClass = __gppClassWithTypedStaticFields(&GppClass{Name: %q, Package: %q, Parents: %s, Annotations: %s}",
-		class.Name, class.Name, templatePackageScope(context.ModulePath, context.Package),
+	fmt.Fprintf(out, "var Gpp%sClass = ", class.Name)
+	if hasStaticFields {
+		out.WriteString("__gppClassWithTypedStaticFields(")
+	}
+	fmt.Fprintf(out, "&GppClass{Name: %q, Package: %q, Parents: %s, Annotations: %s}",
+		class.Name, templatePackageScope(context.ModulePath, context.Package),
 		classDescriptorParents(class, classes, context), annotationUsesLiteral(class.Annotations, context))
-	emitStaticFieldMetadata(out, class, context)
+	if hasStaticFields {
+		emitStaticFieldMetadata(out, class, context)
+	}
 	out.WriteString("\n\n")
 	emitStaticFieldAccessors(out, class, classes)
 	fmt.Fprintf(out, "func init() { __gppRegisterClass(Gpp%sClass) }\n\n", class.Name)

@@ -95,6 +95,22 @@ func (annotation *GppAnnotationType) GppAnnotationFullName() string {
 	return annotation.FullName
 }
 
+var gppInheritedAnnotationTypes gppSync.Map
+
+func InheritedAnnotationType(annotation *GppAnnotationType) *GppAnnotationType {
+	if annotation != nil { gppInheritedAnnotationTypes.Store(annotation, true) }
+	return annotation
+}
+
+func __gppInheritedAnnotationType(annotation *GppAnnotationType) *GppAnnotationType {
+	return InheritedAnnotationType(annotation)
+}
+
+func (annotation *GppAnnotationType) IsInherited() bool {
+	_, inherited := gppInheritedAnnotationTypes.Load(annotation)
+	return inherited
+}
+
 type GppAnnotation struct {
 	Name     string
 	FullName string
@@ -223,6 +239,41 @@ type GppClass struct {
 	Fields      []GppField
 	Methods     []GppMethod
 	Annotations GppAnnotations
+}
+
+// GetDeclaredAnnotationsByType snapshots the matching metadata on this class.
+func (class *GppClass) GetDeclaredAnnotationsByType(annotation *GppAnnotationType) GppAnnotations {
+	result := GppAnnotations{}
+	if class == nil || annotation == nil {
+		return result
+	}
+	for _, value := range class.Annotations {
+		if value.Type == annotation {
+			result = append(result, value)
+		}
+	}
+	return result.Clone()
+}
+
+// GetAnnotationsByType follows the primary superclass only for inheritable
+// annotation types. Repeated declarations on the nearest class stay together.
+func (class *GppClass) GetAnnotationsByType(annotation *GppAnnotationType) GppAnnotations {
+	declared := class.GetDeclaredAnnotationsByType(annotation)
+	if len(declared) != 0 || class == nil || !annotation.IsInherited() {
+		return declared
+	}
+	seen := map[*GppClass]bool{class: true}
+	for len(class.Parents) > 0 {
+		class = class.Parents[0]
+		if class == nil || seen[class] {
+			break
+		}
+		seen[class] = true
+		if matches := class.GetDeclaredAnnotationsByType(annotation); len(matches) != 0 {
+			return matches
+		}
+	}
+	return declared
 }
 
 var gppClassesByName = map[string]*GppClass{}
@@ -355,6 +406,7 @@ type GppParameter = gppRuntime.GppParameter
 type GppClass = gppRuntime.GppClass
 
 func __gppInvocationError(message string) error { return gppRuntime.GppInvocationError(message) }
+func __gppInheritedAnnotationType(annotation *GppAnnotationType) *GppAnnotationType { return gppRuntime.InheritedAnnotationType(annotation) }
 func __gppRegisterClass(class *GppClass) { gppRuntime.RegisterClass(class) }
 func __gppClassWithTypedStaticFields(class *GppClass, fields []__gppStaticFieldRegistration) *GppClass { return gppRuntime.ClassWithTypedStaticFields(class, fields) }
 func __gppTypedStaticField[T any](field GppStaticField) __gppStaticFieldRegistration { return gppRuntime.TypedStaticField[T](field) }
@@ -861,31 +913,33 @@ const (
 )
 
 var introspectionSelectorNames = map[string]string{
-	"name":                 "Name",
-	"fields":               "Fields",
-	"declaredStaticFields": "DeclaredStaticFields",
-	"declaredStaticField":  "DeclaredStaticField",
-	"publicStaticFields":   "PublicStaticFields",
-	"publicStaticField":    "PublicStaticField",
-	"final":                "Final",
-	"constant":             "Constant",
-	"public":               "Public",
-	"owner":                "Owner",
-	"type":                 "Type",
-	"get":                  "Get",
-	"set":                  "Set",
-	"addr":                 "Addr",
-	"annotations":          "Annotations",
-	"methods":              "Methods",
-	"parents":              "Parents",
-	"parameters":           "Parameters",
-	"result":               "Result",
-	"static":               "Static",
-	"has":                  "Has",
-	"find":                 "Find",
-	"all":                  "All",
-	"fullName":             "FullName",
-	"args":                 "Args",
+	"name":                         "Name",
+	"fields":                       "Fields",
+	"declaredStaticFields":         "DeclaredStaticFields",
+	"declaredStaticField":          "DeclaredStaticField",
+	"publicStaticFields":           "PublicStaticFields",
+	"publicStaticField":            "PublicStaticField",
+	"getAnnotationsByType":         "GetAnnotationsByType",
+	"getDeclaredAnnotationsByType": "GetDeclaredAnnotationsByType",
+	"final":                        "Final",
+	"constant":                     "Constant",
+	"public":                       "Public",
+	"owner":                        "Owner",
+	"type":                         "Type",
+	"get":                          "Get",
+	"set":                          "Set",
+	"addr":                         "Addr",
+	"annotations":                  "Annotations",
+	"methods":                      "Methods",
+	"parents":                      "Parents",
+	"parameters":                   "Parameters",
+	"result":                       "Result",
+	"static":                       "Static",
+	"has":                          "Has",
+	"find":                         "Find",
+	"all":                          "All",
+	"fullName":                     "FullName",
+	"args":                         "Args",
 }
 
 func transformIntrospection(src string, context constructorContext) (string, error) {

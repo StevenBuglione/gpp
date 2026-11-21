@@ -98,31 +98,11 @@ func transformIntrospectionMetadataAST(src string, context constructorContext) (
 					addEdit(span.Start, span.Start, "&")
 				}
 			}
-			if kind != introspectionAnnotations || (selector.Name != "Has" && selector.Name != "Find" && selector.Name != "All" && selector.Name != "has" && selector.Name != "find" && selector.Name != "all") {
-				return
+			argument := call.Arguments[0].Value
+			if name, declaration := annotationQueryArgument(kind, selector.Name, argument, context.Annotations, valueTypes); declaration != nil {
+				span := argument.Span()
+				addEdit(span.Start, span.End, annotationDescriptorReferenceForContext(AnnotationUse{Name: name}, declaration, context))
 			}
-			name, ok := annotationNameNode(call.Arguments[0].Value)
-			if !ok {
-				return
-			}
-			declaration := context.Annotations[name]
-			if declaration == nil {
-				for qualified, candidate := range context.Annotations {
-					suffix := qualified
-					if dot := strings.LastIndex(suffix, "."); dot >= 0 {
-						suffix = suffix[dot+1:]
-					}
-					if suffix == name {
-						declaration = candidate
-						break
-					}
-				}
-			}
-			if declaration == nil {
-				return
-			}
-			span := call.Arguments[0].Value.Span()
-			addEdit(span.Start, span.End, annotationDescriptorReference(AnnotationUse{Name: name}, declaration))
 		})
 	}
 	if len(edits) == 0 {
@@ -278,6 +258,8 @@ func introspectionExpressionKindNode(expression ExprNode, variables map[string]i
 					return introspectionStaticFields
 				case "declaredStaticField", "DeclaredStaticField", "publicStaticField", "PublicStaticField":
 					return introspectionStaticField
+				case "getAnnotationsByType", "GetAnnotationsByType", "getDeclaredAnnotationsByType", "GetDeclaredAnnotationsByType":
+					return introspectionAnnotations
 				}
 			}
 			if base == introspectionAnnotations && (selector.Name == "Find" || selector.Name == "find") {
@@ -382,7 +364,8 @@ func introspectionSelectorValid(kind introspectionExprKind, name string) bool {
 	switch kind {
 	case introspectionClass:
 		return name == "name" || name == "fields" || name == "annotations" || name == "methods" || name == "parents" ||
-			name == "declaredStaticFields" || name == "declaredStaticField" || name == "publicStaticFields" || name == "publicStaticField"
+			name == "declaredStaticFields" || name == "declaredStaticField" || name == "publicStaticFields" || name == "publicStaticField" ||
+			name == "getAnnotationsByType" || name == "getDeclaredAnnotationsByType"
 	case introspectionStaticField:
 		return name == "name" || name == "owner" || name == "type" || name == "get" || name == "set" ||
 			name == "annotations" || name == "final" || name == "constant" || name == "public"
@@ -680,7 +663,7 @@ func lowerIntrospectionMetadataSelectorNode(selector *SelectorExpr, context cons
 }
 
 func lowerIntrospectionCallArguments(call *CallExpr, context constructorContext) {
-	if call == nil || context.Introspection == nil || !context.Introspection.Enabled {
+	if call == nil || len(call.Arguments) == 0 || context.Introspection == nil || !context.Introspection.Enabled {
 		return
 	}
 	selector, ok := call.Callee.(*SelectorExpr)
@@ -688,28 +671,11 @@ func lowerIntrospectionCallArguments(call *CallExpr, context constructorContext)
 		return
 	}
 	kind := introspectionExpressionKindNode(selector.Receiver, context.CurrentIntrospectionKinds, context, context.CurrentParameterTypes)
-	if kind == introspectionAnnotations && (selector.Name == "Has" || selector.Name == "Find" || selector.Name == "All" || selector.Name == "has" || selector.Name == "find" || selector.Name == "all") && len(call.Arguments) > 0 {
-		if name, ok := annotationNameNode(call.Arguments[0].Value); ok {
-			declaration := context.Annotations[name]
-			if declaration == nil {
-				for qualified, candidate := range context.Annotations {
-					suffix := qualified
-					if dot := strings.LastIndex(suffix, "."); dot >= 0 {
-						suffix = suffix[dot+1:]
-					}
-					if suffix == name {
-						declaration = candidate
-						break
-					}
-				}
-			}
-			if declaration != nil {
-				reference := annotationDescriptorReferenceForContext(AnnotationUse{Name: name}, declaration, context)
-				call.Arguments[0].Value = qualifiedNameExpr(reference)
-			}
-		}
+	if name, declaration := annotationQueryArgument(kind, selector.Name, call.Arguments[0].Value, context.Annotations, context.CurrentParameterTypes); declaration != nil {
+		reference := annotationDescriptorReferenceForContext(AnnotationUse{Name: name}, declaration, context)
+		call.Arguments[0].Value = qualifiedNameExpr(reference)
 	}
-	if kind != introspectionField || (selector.Name != "Set" && selector.Name != "Addr") || len(call.Arguments) == 0 {
+	if kind != introspectionField || (selector.Name != "Set" && selector.Name != "Addr") {
 		return
 	}
 	argument := call.Arguments[0].Value
@@ -717,6 +683,37 @@ func lowerIntrospectionCallArguments(call *CallExpr, context constructorContext)
 	if actual != "" && !strings.HasPrefix(strings.TrimSpace(actual), "*") && introspectionClassNameNode(argument, context, context.CurrentParameterTypes) != "" {
 		call.Arguments[0].Value = &UnaryExpr{Operator: "&", Operand: argument, SpanValue: argument.Span()}
 	}
+}
+
+func annotationQueryArgument(kind introspectionExprKind, method string, argument ExprNode, declarations map[string]*AnnotationDecl, valueTypes map[string]string) (string, *AnnotationDecl) {
+	switch {
+	case kind == introspectionClass && (method == "GetAnnotationsByType" || method == "getAnnotationsByType" ||
+		method == "GetDeclaredAnnotationsByType" || method == "getDeclaredAnnotationsByType"):
+		name, ok := annotationNameNode(argument)
+		if !ok {
+			return "", nil
+		}
+		first, _, _ := strings.Cut(name, ".")
+		if _, local := valueTypes[first]; local {
+			return "", nil
+		}
+		return name, declarations[name]
+	case kind == introspectionAnnotations && (method == "Has" || method == "Find" || method == "All" ||
+		method == "has" || method == "find" || method == "all"):
+		name, ok := annotationNameNode(argument)
+		if !ok {
+			return "", nil
+		}
+		if declaration := declarations[name]; declaration != nil {
+			return name, declaration
+		}
+		for qualified, candidate := range declarations {
+			if suffix := qualified[strings.LastIndex(qualified, ".")+1:]; suffix == name {
+				return name, candidate
+			}
+		}
+	}
+	return "", nil
 }
 
 func annotationNameNode(expression ExprNode) (string, bool) {

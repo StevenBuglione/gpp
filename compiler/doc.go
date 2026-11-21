@@ -275,10 +275,17 @@ func documentationSymbols(packageName string, declaration Decl) []DocSymbol {
 		for index, target := range value.Targets {
 			targets[index] = string(target)
 		}
+		source := "annotation " + value.Name + "(" + annotationParameterSource(value) + ")"
+		if value.Inherited {
+			source += " inherited"
+		}
+		signature := source
+		if len(targets) > 0 {
+			signature += " on " + strings.Join(targets, ", ")
+		}
 		return []DocSymbol{{
 			Kind: DocAnnotation, Name: value.Name, FullName: qualified(value.Name), Package: packageName,
-			Doc: value.Doc, Signature: "annotation " + value.Name + "(" + annotationParameterSource(value) + ") on " + strings.Join(targets, ", "),
-			Source: "annotation " + value.Name + "(" + annotationParameterSource(value) + ")", SourceFile: value.SourceFile,
+			Doc: value.Doc, Signature: signature, Source: source, SourceFile: value.SourceFile,
 			SourceLine: value.SourceLine, Exported: value.Exported,
 		}}
 	case *TemplateDecl:

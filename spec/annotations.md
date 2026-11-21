@@ -710,30 +710,26 @@ No ORM behavior is part of the language.
 
 ## 25. Inheritance semantics
 
-Class-level annotations are not inherited automatically.
+An annotation declaration can opt into class reflection inheritance.
 
-Example:
+```go
+annotation Role(name string) inherited on class
 
-class Model @{A} {}
+class Model @{Role("model")} {}
 class Employee : Model {}
 
-Employee.class.annotations.has(A)
+Employee.class.getAnnotationsByType(Role)
+Employee.class.getDeclaredAnnotationsByType(Role)
+```
 
-recommended result:
+The first query returns the roles declared by `Model`. The second query
+returns only roles declared by `Employee`. The `class.annotations` property
+also reports annotations declared by the class itself. Field and method
+annotations stay attached to their original member declarations.
 
-false
-
-Libraries may inspect:
-
-Employee.class.parents
-
-if they want inherited class metadata.
-
-Field annotations remain attached to inherited fields.
-
-Method annotations remain attached to inherited methods.
-
-This preserves declaration ownership.
+The `inherited` modifier goes after the name and any parameter list, before
+the optional `on` clause. See [class annotation lookup](annotation-inheritance.md#direct-vs-inherited-class-annotation-lookup)
+for lookup order and multiple parents.
 
 ## 26. Duplicate annotation usage
 

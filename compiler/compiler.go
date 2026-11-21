@@ -33,7 +33,7 @@ type CompileOptions struct {
 
 const generatedFilesManifestName = ".gpp-generated-files.json"
 const generatedGoVersion = "1.27"
-const generatedCodeSchema = 16
+const generatedCodeSchema = 17
 
 type generatedFilesManifest struct {
 	Files    []string                          `json:"files"`
@@ -534,7 +534,6 @@ func emitPackageFiles(files []*File, outputDir string, options CompileOptions, m
 		context.Exceptions = exceptions
 		context.StaticInitialization = staticInitialization
 		context.Ternary = ternary
-		context.Annotations = model.Packages[packageName].Annotations
 		context.Package = packageName
 		context.AtExit = packageName == "main" && atExit
 		context.ModulePath = options.ModulePath

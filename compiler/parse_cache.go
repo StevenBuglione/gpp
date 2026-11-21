@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 )
 
-const parsedFileCacheVersion = 10
+const parsedFileCacheVersion = 11
 
 type parsedFileCacheEntry struct {
 	Version  int

@@ -438,82 +438,20 @@ Therefore libraries can deliberately perform ancestry-aware annotation lookup.
 
 # Direct vs Inherited Class Annotation Lookup
 
-The introspection API should distinguish:
+`class.annotations` describes the declarations on the class.
+`class.getDeclaredAnnotationsByType(Tag)` returns a snapshot for one
+annotation declaration. `class.getAnnotationsByType(Tag)` includes a
+superclass search when `Tag` is declared with the `inherited` modifier.
 
-```text
-annotations declared directly on this class
-```
+The query returns all uses on the nearest class with matching annotations,
+in declaration order. A matching declaration on the queried class stops
+the search. In a multiple-inheritance hierarchy, it follows the first
+parent at each step. Both queries leave class initialization to normal
+active use of the class.
 
-from:
-
-```text
-annotations discoverable through class ancestry
-```
-
-Possible API:
-
-```go
-Child.class.annotations
-```
-
-for direct annotations.
-
-And one of:
-
-```go
-Child.class.allAnnotations
-```
-
-or:
-
-```go
-Child.class.annotations.has(Foo, inherited: true)
-```
-
-or:
-
-```go
-Child.class.annotations.resolve(Foo)
-```
-
-for ancestry-aware lookup.
-
-Exact naming is implementation-defined.
-
-The semantic distinction is required.
-
----
-
-# Preferred API Shape
-
-A clean possible design is:
-
-```go
-class.annotations
-```
-
-Direct annotations only.
-
-And:
-
-```go
-class.annotation(Foo)
-class.hasAnnotation(Foo)
-class.annotationsOf(Foo)
-```
-
-with an explicit inheritance option where needed.
-
-For example:
-
-```go
-class.hasAnnotation(Foo)
-class.hasAnnotation(Foo, inherited: true)
-```
-
-or equivalent.
-
-Do not make inherited lookup implicit unless clearly named.
+Generated Go exposes `GetDeclaredAnnotationsByType` and
+`GetAnnotationsByType`. Both take the generated annotation descriptor,
+such as `GppAnnotation_Tag`.
 
 ---
 

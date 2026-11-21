@@ -1489,6 +1489,11 @@ func parseAnnotationSpec(src string) (*AnnotationDecl, error) {
 		pos = close + 1
 	}
 	rest := strings.TrimSpace(src[pos:])
+	modifier, length := readIdent(rest)
+	inherited := modifier == "inherited"
+	if inherited {
+		rest = strings.TrimSpace(rest[length:])
+	}
 	targets := []AnnotationTarget{}
 	if rest != "" {
 		if len(rest) < 2 || rest[:2] != "on" || (len(rest) > 2 && isIdentPart(rest[2])) {
@@ -1522,6 +1527,7 @@ func parseAnnotationSpec(src string) (*AnnotationDecl, error) {
 		Name:         name,
 		ParameterAST: parseParameterNodes(params),
 		Targets:      targets,
+		Inherited:    inherited,
 	}, nil
 }
 

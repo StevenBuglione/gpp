@@ -22,7 +22,7 @@ import (
 )
 
 // Bump this when compiler output or cache input discovery changes.
-const buildCacheSchema = 33
+const buildCacheSchema = 34
 
 var errBuildCacheUncacheable = errors.New("build inputs cannot be fingerprinted safely")
 
