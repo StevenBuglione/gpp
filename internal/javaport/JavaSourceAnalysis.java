@@ -1,3 +1,4 @@
+import com.sun.source.tree.ArrayAccessTree;
 import com.sun.source.tree.AssignmentTree;
 import com.sun.source.tree.BinaryTree;
 import com.sun.source.tree.BlockTree;
@@ -18,6 +19,7 @@ import com.sun.source.tree.MemberSelectTree;
 import com.sun.source.tree.MethodInvocationTree;
 import com.sun.source.tree.MethodTree;
 import com.sun.source.tree.ModuleTree;
+import com.sun.source.tree.NewArrayTree;
 import com.sun.source.tree.NewClassTree;
 import com.sun.source.tree.OpensTree;
 import com.sun.source.tree.ParenthesizedTree;
@@ -398,6 +400,15 @@ class JavaSourceAnalysis {
                     attributes += ",\"symbol\":" + quote(symbol(trees.getElement(path))) +
                         callArguments(path, call.getArguments());
                 }
+            } else if (tree instanceof NewArrayTree array) {
+                var initializers = array.getInitializers();
+                if (initializers != null) {
+                    kind = "ARRAY_INITIALIZER";
+                }
+                attributes += callArguments(path, initializers == null ? array.getDimensions() : initializers);
+            } else if (tree instanceof ArrayAccessTree access) {
+                attributes += ",\"target\":" + executableExpression(new TreePath(path, access.getExpression())) +
+                    ",\"operand\":" + executableExpression(new TreePath(path, access.getIndex()));
             } else if (tree instanceof AssignmentTree assignment) {
                 attributes += ",\"left\":" + executableExpression(new TreePath(path, assignment.getVariable())) +
                     ",\"right\":" + executableExpression(new TreePath(path, assignment.getExpression()));

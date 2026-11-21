@@ -109,6 +109,10 @@ func (program *javaObjectProgram) canConvertReference(source, target string) boo
 	if canWidenBoxingReference(source, target) {
 		return true
 	}
+	if _, rank := program.arrayType(source); rank != 0 {
+		_, targetRank := program.arrayType(target)
+		return target == javaObjectType || targetRank != 0
+	}
 	if target == javaObjectType {
 		return program.classes[source] != nil || source == javaAutoCloseable || javaCatchTypes[source] != ""
 	}
@@ -158,11 +162,13 @@ func (ctx javaObjectContext) cast(expression *JavaExpression) (string, error) {
 	if primitiveTypes[source] != "" || primitiveTypes[target] != "" {
 		return ctx.program.primitiveLowering.cast(expression, ctx.expression)
 	}
+	if source != target && source != "null" && ctx.arrayElementType(target) != "" {
+		return ctx.arrayTypeTest(expression.Operand, target, "CastArray")
+	}
 	if ctx.program.canConvertReference(source, target) {
 		return ctx.converted(expression.Operand, target)
 	}
-	if !ctx.program.referenceType(source) || !ctx.program.referenceType(target) ||
-		source == javaThrowableArray || target == javaThrowableArray {
+	if !ctx.program.referenceType(source) || !ctx.program.referenceType(target) {
 		return "", fmt.Errorf("unsupported Java reference cast from %s to %s", source, target)
 	}
 	value, err := ctx.expression(expression.Operand)
@@ -178,9 +184,11 @@ func (ctx javaObjectContext) instanceOf(expression *JavaExpression) (string, err
 		return "", fmt.Errorf("unsupported Java instanceof pattern")
 	}
 	source, target := expression.Operand.Type, expression.Target.Type
-	if (source != "null" && !ctx.program.referenceType(source)) || !ctx.program.referenceType(target) ||
-		source == javaThrowableArray || target == javaThrowableArray {
+	if (source != "null" && !ctx.program.referenceType(source)) || !ctx.program.referenceType(target) {
 		return "", fmt.Errorf("unsupported Java instanceof test from %s to %s", source, target)
+	}
+	if ctx.arrayElementType(target) != "" {
+		return ctx.arrayTypeTest(expression.Operand, target, "ArrayInstanceOf")
 	}
 	value, err := ctx.expression(expression.Operand)
 	if err != nil {
@@ -202,9 +210,6 @@ func referenceComparison(expression *JavaExpression, assignable func(string, str
 	equal := expression.Kind == "EQUAL_TO"
 	if expression.Left.Kind == "NULL_LITERAL" && expression.Right.Kind == "NULL_LITERAL" {
 		return strconv.FormatBool(equal), nil
-	}
-	if leftType == javaThrowableArray && rightType == javaThrowableArray {
-		return "", fmt.Errorf("Java array identity comparison requires a native array reference")
 	}
 	target := leftType
 	if !assignable(rightType, target) {

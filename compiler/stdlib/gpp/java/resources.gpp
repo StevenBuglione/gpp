@@ -100,6 +100,12 @@ func throwableSuppression(value Throwable, create bool) *suppressedErrors {
         return &failure.suppressed
     case *ArithmeticException:
         return &failure.suppressed
+    case *ArrayIndexOutOfBoundsException:
+        return &failure.suppressed
+    case *NegativeArraySizeException:
+        return &failure.suppressed
+    case *ArrayStoreException:
+        return &failure.suppressed
     case *IllegalArgumentException:
         return suppressionsFor(failure, create)
     case *StringIndexOutOfBoundsException:

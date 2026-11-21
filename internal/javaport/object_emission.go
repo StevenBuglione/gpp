@@ -311,6 +311,9 @@ func (ctx javaObjectContext) statement(statement JavaStatement, result string) (
 		if expression.Kind == "METHOD_INVOCATION" {
 			return ctx.invoke(expression)
 		}
+		if target := arrayAssignmentTarget(expression); target != nil {
+			return ctx.arrayAssignment(target, expression.Right)
+		}
 		if expression.Kind == "ASSIGNMENT" && expression.Left != nil && !expression.Left.Static && expression.Right != nil &&
 			(expression.Left.Kind == "FIELD" || expression.Left.Kind == "LOCAL_VARIABLE") {
 			target, err := ctx.expression(expression.Left)
@@ -375,13 +378,21 @@ func (ctx javaObjectContext) expression(expression *JavaExpression) (string, err
 		return ctx.referenceComparison(expression)
 	case "CONDITIONAL_EXPRESSION":
 		return emitJavaConditional(expression, conditionalResultType(expression), ctx.program.objectGoType, ctx.converted)
+	case "NEW_ARRAY", "ARRAY_INITIALIZER":
+		return ctx.newArray(expression)
+	case "ARRAY_ACCESS":
+		return ctx.arrayAccess(expression)
+	case "ASSIGNMENT":
+		if target := arrayAssignmentTarget(expression); target != nil {
+			return ctx.arrayAssignment(target, expression.Right)
+		}
+		return "", fmt.Errorf("unsupported Java assignment expression")
 	case "ARRAY_LENGTH":
-		if expression.Target == nil || expression.Target.Type != javaThrowableArray {
+		if expression.Target == nil || ctx.arrayElementType(expression.Target.Type) == "" {
 			return "", fmt.Errorf("unsupported Java array length expression")
 		}
 		array, err := ctx.expression(expression.Target)
-		ctx.program.runtime = true
-		return "int32(len(javart.RequireNonNull(" + array + ")))", err
+		return ctx.arrayLength(array), err
 	case "PARENTHESIZED":
 		value, err := ctx.expression(expression.Operand)
 		return "(" + value + ")", err
@@ -444,7 +455,7 @@ func (ctx javaObjectContext) invoke(expression *JavaExpression) (string, error) 
 	if expression.Symbol == "java.lang.Throwable#getSuppressed()" && expression.Target != nil {
 		value, err := ctx.expression(expression.Target)
 		ctx.program.runtime = true
-		return "javart.Suppressed(" + value + ")", err
+		return "javart.SuppressedArray(" + value + ")", err
 	}
 	callee := ctx.program.methods[expression.Symbol]
 	if callee != nil && expression.Target != nil && ctx.program.classes[expression.Target.Type] != nil && callee.public {

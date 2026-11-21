@@ -13,7 +13,6 @@ const (
 	javaClassCastException       = "java.lang.ClassCastException"
 	javaArithmeticException      = "java.lang.ArithmeticException"
 	javaAutoCloseable            = "java.lang.AutoCloseable"
-	javaThrowableArray           = "java.lang.Throwable[]"
 )
 
 var javaCatchTypes = map[string]string{
@@ -24,6 +23,10 @@ var javaCatchTypes = map[string]string{
 	javaNullPointerException:                    "*javart.NullPointerException",
 	javaClassCastException:                      "*javart.ClassCastException",
 	javaArithmeticException:                     "*javart.ArithmeticException",
+	"java.lang.IndexOutOfBoundsException":       "javart.IndexOutOfBoundsException",
+	"java.lang.ArrayIndexOutOfBoundsException":  "*javart.ArrayIndexOutOfBoundsException",
+	"java.lang.NegativeArraySizeException":      "*javart.NegativeArraySizeException",
+	"java.lang.ArrayStoreException":             "*javart.ArrayStoreException",
 	"java.lang.StringIndexOutOfBoundsException": "*javart.StringIndexOutOfBoundsException",
 	javaIOException:                             "*javart.IOException",
 }

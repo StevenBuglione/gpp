@@ -1,0 +1,215 @@
+package gpp.java
+
+import (
+    "fmt"
+    "reflect"
+    "slices"
+)
+
+// ArrayType records the runtime array type, including the component's actual
+// Java superclass chain when Go represents that chain through embedded views.
+type ArrayType struct {
+    element reflect.Type
+    ancestors []reflect.Type
+    rank int
+    acceptsElement func(any) bool
+}
+
+func ArrayTypeOf[T any](rank int, ancestors ...any) ArrayType {
+    arrayType := ArrayType{element: reflect.TypeFor[T](), rank: rank,
+        acceptsElement: func(value any) bool {
+            _, ok := referenceView[T](value)
+            return ok
+        },
+    }
+    for _, ancestor := range ancestors {
+        arrayType.ancestors = append(arrayType.ancestors, reflect.TypeOf(ancestor))
+    }
+    return arrayType
+}
+
+func (arrayType ArrayType) referenceElement() bool {
+    return arrayType.element.Kind() == reflect.Pointer || arrayType.element.Kind() == reflect.Interface
+}
+
+func (source ArrayType) assignableTo(target ArrayType) bool {
+    if source.rank > target.rank {
+        // The component being widened here is itself an array.
+        return target.element == reflect.TypeFor[any]()
+    }
+    if source.rank != target.rank {
+        return false
+    }
+    if source.element == target.element {
+        return true
+    }
+    if !source.referenceElement() || !target.referenceElement() {
+        return false
+    }
+    return source.element.AssignableTo(target.element) || slices.Contains(source.ancestors, target.element)
+}
+
+// Array is one Java array object. Its pointer identity is shared by covariant
+// references. Primitive storage uses an unboxed Go slice of the exact width.
+type Array struct {
+    arrayType ArrayType
+    length int32
+    elements any
+}
+
+// NewArray allocates the specified leading dimensions of an array of T.
+func NewArray[T any](rank int, dimensions []int32, ancestors ...any) *Array {
+    if len(dimensions) == 0 || len(dimensions) > rank {
+        panic("invalid dimensions for a Java array")
+    }
+    for _, length := range dimensions {
+        if length < 0 {
+            Raise(&NegativeArraySizeException{Size: length})
+        }
+    }
+    return allocateArray[T](ArrayTypeOf[T](rank, ancestors...), dimensions)
+}
+
+func allocateArray[T any](arrayType ArrayType, dimensions []int32) *Array {
+    length := dimensions[0]
+    array := &Array{arrayType: arrayType, length: length}
+    if arrayType.rank == 1 && !arrayType.referenceElement() {
+        array.elements = make([]T, length)
+        return array
+    }
+    references := make([]any, length)
+    if len(dimensions) > 1 {
+        arrayType.rank--
+        for index := range references {
+            references[index] = allocateArray[T](arrayType, dimensions[1:])
+        }
+    }
+    array.elements = references
+    return array
+}
+
+func ArrayLength(array *Array) int32 {
+    if array == nil {
+        Raise(&NullPointerException{})
+    }
+    return array.length
+}
+
+func checkArrayIndex(array *Array, index int32) {
+    length := ArrayLength(array)
+    if index < 0 || index >= length {
+        Raise(&ArrayIndexOutOfBoundsException{Index: index, Length: length})
+    }
+}
+
+// ArrayGet loads a component using the caller's static Java component type T.
+// A reference load can recover a typed ancestor view from the stored object.
+func ArrayGet[T any](array *Array, index int32) T {
+    checkArrayIndex(array, index)
+    if references, ok := array.elements.([]any); ok {
+        value := references[index]
+        if value == nil {
+            var zero T
+            return zero
+        }
+        if result, ok := referenceView[T](value); ok {
+            return result
+        }
+        panic("invalid Go reference type for Java array load")
+    }
+    return array.elements.([]T)[index]
+}
+
+// ArraySet checks a reference store against the allocation's runtime array type.
+func ArraySet[T any](array *Array, index int32, value T) {
+    checkArrayIndex(array, index)
+    if references, ok := array.elements.([]any); ok {
+        object := CanonicalReference(value)
+        if object != nil && !array.arrayType.acceptsComponent(object) {
+            Raise(&ArrayStoreException{})
+        }
+        references[index] = object
+        return
+    }
+    array.elements.([]T)[index] = value
+}
+
+func (arrayType ArrayType) acceptsComponent(value any) bool {
+    if arrayType.rank == 1 {
+        return arrayType.acceptsElement(value)
+    }
+    nested, ok := value.(*Array)
+    arrayType.rank--
+    return ok && nested.arrayType.assignableTo(arrayType)
+}
+
+func ArrayInstanceOf(value any, target ArrayType) bool {
+    array, ok := value.(*Array)
+    return ok && array != nil && array.arrayType.assignableTo(target)
+}
+
+func CastArray(value any, target ArrayType) *Array {
+    if isNullReference(value) {
+        return nil
+    }
+    if !ArrayInstanceOf(value, target) {
+        Raise(&ClassCastException{})
+    }
+    return value.(*Array)
+}
+
+var emptySuppressedArray = NewArray[Throwable](1, []int32{0})
+
+// SuppressedArray exposes getSuppressed to translated Java as a Java array.
+func SuppressedArray(cause Throwable) *Array {
+    values := Suppressed(cause)
+    if len(values) == 0 {
+        return emptySuppressedArray
+    }
+    result := NewArray[Throwable](1, []int32{int32(len(values))})
+    for index, value := range values {
+        ArraySet[Throwable](result, int32(index), value)
+    }
+    return result
+}
+
+type IndexOutOfBoundsException interface {
+    RuntimeException
+    Exception
+    JavaIndexOutOfBoundsException()
+}
+
+func (*StringIndexOutOfBoundsException) JavaIndexOutOfBoundsException() {}
+
+type ArrayIndexOutOfBoundsException struct {
+    Index int32
+    Length int32
+    suppressed suppressedErrors
+}
+
+func (failure *ArrayIndexOutOfBoundsException) Error() string {
+    return fmt.Sprintf("Index %d out of bounds for length %d", failure.Index, failure.Length)
+}
+func (*ArrayIndexOutOfBoundsException) JavaClassName() string { return "java.lang.ArrayIndexOutOfBoundsException" }
+func (*ArrayIndexOutOfBoundsException) JavaRuntimeException() {}
+func (*ArrayIndexOutOfBoundsException) JavaException() {}
+func (*ArrayIndexOutOfBoundsException) JavaIndexOutOfBoundsException() {}
+
+type NegativeArraySizeException struct {
+    Size int32
+    suppressed suppressedErrors
+}
+
+func (failure *NegativeArraySizeException) Error() string { return fmt.Sprint(failure.Size) }
+func (*NegativeArraySizeException) JavaClassName() string { return "java.lang.NegativeArraySizeException" }
+func (*NegativeArraySizeException) JavaRuntimeException() {}
+func (*NegativeArraySizeException) JavaException() {}
+
+type ArrayStoreException struct {
+    suppressed suppressedErrors
+}
+
+func (*ArrayStoreException) Error() string { return "java.lang.ArrayStoreException" }
+func (*ArrayStoreException) JavaClassName() string { return "java.lang.ArrayStoreException" }
+func (*ArrayStoreException) JavaRuntimeException() {}
+func (*ArrayStoreException) JavaException() {}

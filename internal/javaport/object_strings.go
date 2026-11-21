@@ -31,8 +31,8 @@ func (program *javaObjectProgram) mappedObjectType(javaType string) string {
 	if javaType == javaAutoCloseable {
 		return "javart.AutoCloseable"
 	}
-	if javaType == javaThrowableArray {
-		return "[]javart.Throwable"
+	if _, rank := program.arrayType(javaType); rank != 0 {
+		return "*javart.Array"
 	}
 	if goType := javaCatchTypes[javaType]; goType != "" {
 		return goType
