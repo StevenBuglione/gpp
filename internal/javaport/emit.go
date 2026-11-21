@@ -23,12 +23,20 @@ var primitiveTypes = map[string]string{
 
 // EmitGPP translates supported Java declaration and executable forms.
 func EmitGPP(report Report) (string, error) {
+	hasClass := false
 	for _, file := range report.Files {
 		for _, declaration := range file.Declarations {
 			if declaration.Kind == "CLASS" && declaration.Owner == "" {
-				return emitPrimitiveUtilityClasses(report)
+				hasClass = true
+			}
+			if declaration.Kind == "METHOD" && declaration.Name == "<init>" &&
+				!slices.Contains(declaration.Modifiers, "PRIVATE") {
+				return emitJavaObjects(report)
 			}
 		}
+	}
+	if hasClass {
+		return emitPrimitiveUtilityClasses(report)
 	}
 	return EmitInterfaces(report)
 }

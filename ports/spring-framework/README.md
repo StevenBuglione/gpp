@@ -14,3 +14,12 @@ path is declared in this directory's `go.mod`.
 The check compiles the port into a temporary Go module and tests it from a
 separate module using stock Go. Set `GPP` to an absolute path if the compiler
 is outside your PATH. The check works from a standalone copy of this project.
+
+The ASM and CGLIB metadata classes are reproducible from the pinned Framework
+Java sources. After building the reference checkout's `:spring-core:compileJava`
+task, compare the translated sources with the port. Set `JAVA` to the Java
+launcher from a JDK when it is outside your PATH.
+
+```bash
+./scripts/check-translated-classes.sh /path/to/spring-framework
+```

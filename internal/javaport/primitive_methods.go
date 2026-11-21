@@ -35,7 +35,9 @@ func emitPrimitiveUtilityClasses(report Report) (string, error) {
 				return "", unsupportedSource(file, member, "unsupported utility-class member")
 			}
 			if member.Name == "<init>" {
-				if hasConstructor || len(member.Parameters) != 0 || member.Body.Statements != 0 ||
+				if hasConstructor || len(member.Parameters) != 0 || len(member.Body.Code) != 0 ||
+					member.ConstructorCall == nil || member.ConstructorCall.Receiver != "super" ||
+					member.ConstructorCall.Symbol != "java.lang.Object#<init>()" ||
 					!slices.Equal(member.Modifiers, []string{"PRIVATE"}) {
 					return "", unsupportedSource(file, member, "expected a private empty constructor")
 				}
@@ -74,7 +76,8 @@ func emitPrimitiveMethod(name string, declaration Occurrence) (string, bool, err
 	result, ok := primitiveTypes[declaration.Result]
 	if !ok || len(declaration.Modifiers) != 2 || !slices.Contains(declaration.Modifiers, "PUBLIC") ||
 		!slices.Contains(declaration.Modifiers, "STATIC") ||
-		declaration.Body.Statements != 1 || declaration.Body.Return == nil {
+		len(declaration.Body.Code) != 1 || declaration.Body.Code[0].Kind != "RETURN" ||
+		declaration.Body.Code[0].Expression == nil {
 		return "", false, fmt.Errorf("expected a public static primitive method with one return expression")
 	}
 
@@ -90,7 +93,7 @@ func emitPrimitiveMethod(name string, declaration Occurrence) (string, bool, err
 		parameters = append(parameters, generatedName+" "+goType)
 	}
 
-	expression := declaration.Body.Return
+	expression := declaration.Body.Code[0].Expression
 	value, usesRuntime, err := emitPrimitiveExpression(expression, arguments)
 	if err != nil {
 		return "", false, err
@@ -153,7 +156,7 @@ func emitPrimitiveShift(expression *PrimitiveExpression, arguments map[string]st
 	usesRuntime = usesRuntime || convertedWithRuntime
 
 	var distance string
-	if expression.Right.Literal != "" {
+	if expression.Right.Kind == "INT_LITERAL" || expression.Right.Kind == "LONG_LITERAL" {
 		literal, err := strconv.ParseInt(expression.Right.Literal, 10, 64)
 		if err != nil {
 			return "", false, fmt.Errorf("invalid shift distance %q", expression.Right.Literal)

@@ -121,7 +121,9 @@ rollback rules with the pinned Boot runtime classpath.
 ```
 
 Use `--emit-gpp` to translate public standalone Java interfaces with
-primitive method signatures, integer or boolean constants, and inheritance\nwithin the selected package. Generated Go marker methods preserve explicit\ninterface membership for derived Java interfaces. The emitter
+primitive method signatures, integer or boolean constants, and inheritance
+within the selected package. Generated Go marker methods preserve explicit
+interface membership for derived Java interfaces. The emitter
 preserves Java numeric widths and emits normal Go-compatible method sets.
 Unsupported declarations produce source diagnostics before any output.
 
@@ -134,6 +136,12 @@ classes with private empty constructors. The methods take primitive arguments
 and return a parameter, cast, or shift expression. Generated function names combine
 the Java class and method names. Floating-point narrowing follows Java's
 saturation and NaN rules through the bundled `gpp/java` package.
+
+For public classes with primitive fields and method signatures, the emitter
+also supports same-package single inheritance, constructor chains, instance
+initialization and virtual calls during construction. It emits Go constructors
+such as `NewChild()` and `NewChildWithInt(int32)`. Go callers can use exported
+methods directly or request an ancestor view such as `child.GppAsBase()`.
 
 ## Developing this documentation site
 

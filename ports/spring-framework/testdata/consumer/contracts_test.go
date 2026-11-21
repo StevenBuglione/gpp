@@ -4,9 +4,21 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/StevenBuglione/spring-framework-gpp/org/springframework/asm"
+	"github.com/StevenBuglione/spring-framework-gpp/org/springframework/cglib"
 	spring "github.com/StevenBuglione/spring-framework-gpp/org/springframework/core"
 	"github.com/StevenBuglione/spring-framework-gpp/org/springframework/util/backoff"
 )
+
+func TestTranslatedSpringMetadataClasses(t *testing.T) {
+	var version int32 = asm.SpringAsmInfoASM_VERSION
+	if version != 17432576 {
+		t.Fatalf("Spring ASM version = %d", version)
+	}
+	if asm.NewSpringAsmInfo() == asm.NewSpringAsmInfo() || cglib.NewSpringCglibInfo() == cglib.NewSpringCglibInfo() {
+		t.Fatal("separate Java object allocations share an identity")
+	}
+}
 
 func TestSpringOrdered(t *testing.T) {
 	var bean spring.Ordered = orderedBean(42)

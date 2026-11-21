@@ -108,25 +108,30 @@ type ModuleDirective struct {
 }
 
 type Occurrence struct {
-	Kind              string           `json:"kind"`
-	Symbol            string           `json:"symbol"`
-	Type              string           `json:"type"`
-	Owner             string           `json:"owner,omitempty"`
-	Name              string           `json:"name,omitempty"`
-	Modifiers         []string         `json:"modifiers,omitempty"`
-	Parameters        []Parameter      `json:"parameters,omitempty"`
-	Result            string           `json:"result,omitempty"`
-	Thrown            []string         `json:"thrown,omitempty"`
-	Supertypes        []string         `json:"supertypes,omitempty"`
-	HasTypeParams     bool             `json:"hasTypeParams,omitempty"`
-	Constant          *string          `json:"constant,omitempty"`
-	AnnotationCount   int              `json:"annotationCount,omitempty"`
-	Annotations       []Annotation     `json:"annotations,omitempty"`
-	AnnotationDefault *AnnotationValue `json:"annotationDefault,omitempty"`
-	ModuleName        string           `json:"moduleName,omitempty"`
-	TypeDescription   *TypeDescription `json:"typeDescription,omitempty"`
-	TypeParameters    []TypeParameter  `json:"typeParameters,omitempty"`
-	Body              *MethodBody      `json:"body,omitempty"`
+	Kind              string               `json:"kind"`
+	Symbol            string               `json:"symbol"`
+	Type              string               `json:"type"`
+	Owner             string               `json:"owner,omitempty"`
+	Name              string               `json:"name,omitempty"`
+	Modifiers         []string             `json:"modifiers,omitempty"`
+	Parameters        []Parameter          `json:"parameters,omitempty"`
+	Result            string               `json:"result,omitempty"`
+	Thrown            []string             `json:"thrown,omitempty"`
+	Supertypes        []string             `json:"supertypes,omitempty"`
+	HasTypeParams     bool                 `json:"hasTypeParams,omitempty"`
+	Constant          *string              `json:"constant,omitempty"`
+	AnnotationCount   int                  `json:"annotationCount,omitempty"`
+	Annotations       []Annotation         `json:"annotations,omitempty"`
+	AnnotationDefault *AnnotationValue     `json:"annotationDefault,omitempty"`
+	ModuleName        string               `json:"moduleName,omitempty"`
+	TypeDescription   *TypeDescription     `json:"typeDescription,omitempty"`
+	TypeParameters    []TypeParameter      `json:"typeParameters,omitempty"`
+	Body              *MethodBody          `json:"body,omitempty"`
+	Initializer       *PrimitiveExpression `json:"initializer,omitempty"`
+	InitializerOwner  string               `json:"initializerOwner,omitempty"`
+	StaticInitializer bool                 `json:"staticInitializer,omitempty"`
+	ConstructorCall   *PrimitiveExpression `json:"constructorCall,omitempty"`
+	Synthetic         bool                 `json:"synthetic,omitempty"`
 	// Start and End are Java compiler offsets in UTF-16 code units.
 	Start  int64 `json:"start"`
 	End    int64 `json:"end"`
@@ -135,20 +140,30 @@ type Occurrence struct {
 }
 
 type MethodBody struct {
-	Statements int                  `json:"statements"`
-	Return     *PrimitiveExpression `json:"return,omitempty"`
+	Code []JavaStatement `json:"code"`
+}
+
+type JavaStatement struct {
+	Kind       string               `json:"kind"`
+	Expression *PrimitiveExpression `json:"expression,omitempty"`
+	Line       int64                `json:"line"`
+	Column     int64                `json:"column"`
 }
 
 type PrimitiveExpression struct {
-	Kind    string               `json:"kind"`
-	Type    string               `json:"type"`
-	Name    string               `json:"name,omitempty"`
-	Operand *PrimitiveExpression `json:"operand,omitempty"`
-	Left    *PrimitiveExpression `json:"left,omitempty"`
-	Right   *PrimitiveExpression `json:"right,omitempty"`
-	Literal string               `json:"literal,omitempty"`
-	Line    int64                `json:"line"`
-	Column  int64                `json:"column"`
+	Kind      string                 `json:"kind"`
+	Type      string                 `json:"type"`
+	Name      string                 `json:"name,omitempty"`
+	Operand   *PrimitiveExpression   `json:"operand,omitempty"`
+	Left      *PrimitiveExpression   `json:"left,omitempty"`
+	Right     *PrimitiveExpression   `json:"right,omitempty"`
+	Literal   string                 `json:"literal,omitempty"`
+	Symbol    string                 `json:"symbol,omitempty"`
+	Receiver  string                 `json:"receiver,omitempty"`
+	Static    bool                   `json:"static,omitempty"`
+	Arguments []*PrimitiveExpression `json:"arguments,omitempty"`
+	Line      int64                  `json:"line"`
+	Column    int64                  `json:"column"`
 }
 
 // TypeDescription preserves the generic structure that a JVM descriptor erases.

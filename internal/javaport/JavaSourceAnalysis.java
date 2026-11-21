@@ -1,8 +1,10 @@
+import com.sun.source.tree.AssignmentTree;
 import com.sun.source.tree.BinaryTree;
 import com.sun.source.tree.BlockTree;
 import com.sun.source.tree.ClassTree;
 import com.sun.source.tree.CompilationUnitTree;
 import com.sun.source.tree.ExportsTree;
+import com.sun.source.tree.ExpressionStatementTree;
 import com.sun.source.tree.ExpressionTree;
 import com.sun.source.tree.IdentifierTree;
 import com.sun.source.tree.ImportTree;
@@ -18,6 +20,7 @@ import com.sun.source.tree.ParenthesizedTree;
 import com.sun.source.tree.ProvidesTree;
 import com.sun.source.tree.RequiresTree;
 import com.sun.source.tree.ReturnTree;
+import com.sun.source.tree.StatementTree;
 import com.sun.source.tree.Tree;
 import com.sun.source.tree.TypeCastTree;
 import com.sun.source.tree.UsesTree;
@@ -41,6 +44,7 @@ import javax.lang.model.element.AnnotationValue;
 import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.ExecutableElement;
+import javax.lang.model.element.Modifier;
 import javax.lang.model.element.Parameterizable;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.element.TypeParameterElement;
@@ -182,21 +186,46 @@ class JavaSourceAnalysis {
             var positions = trees.getSourcePositions();
             long start = positions.getStartPosition(unit, tree);
             long end = positions.getEndPosition(unit, tree);
+            var path = getCurrentPath();
+            var element = trees.getElement(path);
+            boolean synthetic = end == Diagnostic.NOPOS;
+            if (synthetic && includeMethodBodies && tree instanceof MethodTree && element != null &&
+                    element.getKind() == ElementKind.CONSTRUCTOR) {
+                var enclosing = path.getParentPath().getLeaf();
+                start = positions.getStartPosition(unit, enclosing);
+                end = positions.getEndPosition(unit, enclosing);
+            }
             if (start == Diagnostic.NOPOS || end == Diagnostic.NOPOS) {
                 return;
             }
-            var path = getCurrentPath();
-            var element = trees.getElement(path);
             var type = trees.getTypeMirror(path);
             output.add("{" + "\"kind\":" + quote(tree.getKind().name()) +
                 ",\"symbol\":" + quote(symbol(element)) +
                 ",\"type\":" + quote(type == null ? "" : type.toString()) +
                 (output == declarations ? declarationAttributes(element) +
                     ",\"typeDescription\":" + typeRecord(type) : "") +
-                (includeMethodBodies && tree instanceof MethodTree method ? methodBodyRecord(path, method) : "") +
+                (includeMethodBodies && output == declarations ? executableAttributes(path) : "") +
+                (synthetic ? ",\"synthetic\":true" : "") +
                 ",\"start\":" + start + ",\"end\":" + end +
                 ",\"line\":" + unit.getLineMap().getLineNumber(start) +
                 ",\"column\":" + unit.getLineMap().getColumnNumber(start) + "}");
+        }
+
+        private String executableAttributes(TreePath path) {
+            var tree = path.getLeaf();
+            if (tree instanceof MethodTree method) {
+                return methodBodyRecord(path, method);
+            }
+            if (tree instanceof VariableTree field && field.getInitializer() != null) {
+                return ",\"initializer\":" + primitiveExpression(new TreePath(path, field.getInitializer()));
+            }
+            if (tree instanceof BlockTree block) {
+                var owner = trees.getElement(path.getParentPath());
+                return ",\"initializerOwner\":" + quote(symbol(owner)) +
+                    ",\"staticInitializer\":" + block.isStatic() +
+                    ",\"body\":" + bodyRecord(path, block.getStatements());
+            }
+            return "";
         }
 
         private String methodBodyRecord(TreePath path, MethodTree method) {
@@ -205,34 +234,89 @@ class JavaSourceAnalysis {
                 return "";
             }
             var positions = trees.getSourcePositions();
-            // javac can insert an implicit super() call while attributing a constructor.
-            var statements = body.getStatements().stream()
-                .filter(statement -> positions.getEndPosition(unit, statement) != Diagnostic.NOPOS)
+            var statements = body.getStatements();
+            var bodyPath = new TreePath(path, body);
+            String invocation = "";
+            // Keep javac's implicit super() as well as explicit this(...) or super(...).
+            if (!statements.isEmpty() && method.getReturnType() == null &&
+                    statements.get(0) instanceof ExpressionStatementTree statement &&
+                    statement.getExpression() instanceof MethodInvocationTree call &&
+                    call.getMethodSelect() instanceof IdentifierTree selector &&
+                    (selector.getName().contentEquals("this") || selector.getName().contentEquals("super"))) {
+                var callPath = new TreePath(new TreePath(bodyPath, statement), call);
+                invocation = ",\"constructorCall\":" + primitiveExpression(callPath);
+                statements = statements.subList(1, statements.size());
+            }
+            var explicit = statements.stream()
+                .filter(statement -> positions.getEndPosition(unit, statement) != Diagnostic.NOPOS ||
+                    method.getReturnType() == null)
                 .toList();
-            String record = ",\"body\":{\"statements\":" + statements.size();
-            if (statements.size() == 1 && statements.get(0) instanceof ReturnTree statement &&
-                    statement.getExpression() != null) {
-                var statementPath = new TreePath(new TreePath(path, body), statement);
-                record += ",\"return\":" + primitiveExpression(new TreePath(statementPath, statement.getExpression()));
+            return ",\"body\":" + bodyRecord(bodyPath, explicit) + invocation;
+        }
+
+        private String bodyRecord(TreePath path, List<? extends StatementTree> statements) {
+            return "{\"code\":[" + statements.stream()
+                .map(statement -> statementRecord(new TreePath(path, statement)))
+                .collect(Collectors.joining(",")) + "]}";
+        }
+
+        private String statementRecord(TreePath path) {
+            var statement = path.getLeaf();
+            String record = "{\"kind\":" + quote(statement.getKind().name()) + positionRecord(statement);
+            ExpressionTree expression = null;
+            if (statement instanceof ReturnTree returned) {
+                expression = returned.getExpression();
+            } else if (statement instanceof ExpressionStatementTree expressionStatement) {
+                expression = expressionStatement.getExpression();
+            }
+            if (expression != null) {
+                record += ",\"expression\":" + primitiveExpression(new TreePath(path, expression));
             }
             return record + "}";
+        }
+
+        private String positionRecord(Tree tree) {
+            long start = trees.getSourcePositions().getStartPosition(unit, tree);
+            if (start == Diagnostic.NOPOS) {
+                return "";
+            }
+            return ",\"line\":" + unit.getLineMap().getLineNumber(start) +
+                ",\"column\":" + unit.getLineMap().getColumnNumber(start);
         }
 
         private String primitiveExpression(TreePath path) {
             var tree = path.getLeaf();
             var type = trees.getTypeMirror(path);
-            long start = trees.getSourcePositions().getStartPosition(unit, tree);
             String kind = tree.getKind().name();
             String attributes = ",\"type\":" + quote(type == null ? "" : type.getKind().name().toLowerCase(Locale.ROOT)) +
-                ",\"line\":" + unit.getLineMap().getLineNumber(start) +
-                ",\"column\":" + unit.getLineMap().getColumnNumber(start);
+                positionRecord(tree);
             if (tree instanceof IdentifierTree identifier) {
                 var element = trees.getElement(path);
                 if (element != null && element.getKind() == ElementKind.PARAMETER) {
                     attributes += ",\"name\":" + quote(identifier.getName().toString());
+                } else if (element instanceof VariableElement field && element.getKind().isField()) {
+                    kind = "FIELD";
+                    attributes += fieldExpression(field, "this");
                 } else {
                     kind = "NON_PARAMETER_IDENTIFIER";
                 }
+            } else if (tree instanceof MemberSelectTree selector && trees.getElement(path) instanceof VariableElement field &&
+                    field.getKind().isField()) {
+                kind = "FIELD";
+                attributes += fieldExpression(field, receiver(path, selector.getExpression()));
+            } else if (tree instanceof MethodInvocationTree call) {
+                var callee = call.getMethodSelect();
+                String receiver = callee instanceof MemberSelectTree selector ? receiver(path, selector.getExpression()) : "this";
+                if (callee instanceof IdentifierTree identifier && identifier.getName().contentEquals("super")) {
+                    receiver = "super";
+                }
+                attributes += ",\"symbol\":" + quote(symbol(trees.getElement(path))) +
+                    ",\"receiver\":" + quote(receiver) + ",\"arguments\":[" + call.getArguments().stream()
+                    .map(argument -> primitiveExpression(new TreePath(path, argument)))
+                    .collect(Collectors.joining(",")) + "]";
+            } else if (tree instanceof AssignmentTree assignment) {
+                attributes += ",\"left\":" + primitiveExpression(new TreePath(path, assignment.getVariable())) +
+                    ",\"right\":" + primitiveExpression(new TreePath(path, assignment.getExpression()));
             } else if (tree instanceof TypeCastTree cast) {
                 attributes += ",\"operand\":" + primitiveExpression(new TreePath(path, cast.getExpression()));
             } else if (tree instanceof ParenthesizedTree parentheses) {
@@ -240,11 +324,34 @@ class JavaSourceAnalysis {
             } else if (tree instanceof BinaryTree binary) {
                 attributes += ",\"left\":" + primitiveExpression(new TreePath(path, binary.getLeftOperand())) +
                     ",\"right\":" + primitiveExpression(new TreePath(path, binary.getRightOperand()));
-            } else if (tree instanceof LiteralTree literal && (tree.getKind() == Tree.Kind.INT_LITERAL ||
-                    tree.getKind() == Tree.Kind.LONG_LITERAL)) {
-                attributes += ",\"literal\":" + quote(literal.getValue().toString());
+            } else if (tree instanceof LiteralTree literal && type != null && type.getKind().isPrimitive()) {
+                Object value = literal.getValue();
+                String spelling = value instanceof Character character ? Integer.toString(character) : value.toString();
+                attributes += ",\"literal\":" + quote(spelling);
             }
             return "{\"kind\":" + quote(kind) + attributes + "}";
+        }
+
+        private String fieldExpression(VariableElement field, String receiver) {
+            String attributes = ",\"symbol\":" + quote(symbol(field)) + ",\"receiver\":" + quote(receiver);
+            if (field.getModifiers().contains(Modifier.STATIC)) {
+                attributes += ",\"static\":true";
+                Object value = field.getConstantValue();
+                if (value != null && field.asType().getKind().isPrimitive()) {
+                    String spelling = value instanceof Character character ? Integer.toString(character) : value.toString();
+                    attributes += ",\"literal\":" + quote(spelling);
+                }
+            }
+            return attributes;
+        }
+
+        private String receiver(TreePath path, ExpressionTree expression) {
+            if (expression instanceof IdentifierTree name &&
+                    (name.getName().contentEquals("this") || name.getName().contentEquals("super"))) {
+                return name.getName().toString();
+            }
+            var receiverPath = TreePath.getPath(path, expression);
+            return receiverPath != null && trees.getElement(receiverPath) instanceof TypeElement ? "type" : "other";
         }
 
         private String declarationAttributes(Element element) {
