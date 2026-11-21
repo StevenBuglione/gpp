@@ -70,6 +70,9 @@ func (program *javaObjectProgram) emitClass(out *strings.Builder, class *javaObj
 	}
 	program.emitObjectIdentity(out, class, name)
 	class.emitInterfaceMarkers(out, name)
+	if err := program.emitInstanceFieldBridges(out, class, name); err != nil {
+		return err
+	}
 
 	ctx := javaObjectContext{program: program, class: class, controlID: new(int)}
 	if len(class.initializers) > 0 {
@@ -474,21 +477,11 @@ func (ctx javaObjectContext) field(expression *JavaExpression) (string, error) {
 	if value := ctx.program.primitiveLowering.booleanConstant(expression); value != "" {
 		return value, nil
 	}
-	field, found := ctx.program.fields[expression.Symbol]
-	if !found || expression.Static || (expression.Receiver != "this" && expression.Receiver != "super") {
-		return "", fmt.Errorf("unsupported field access %s", expression.Symbol)
+	field, err := ctx.instanceField(expression)
+	if err != nil {
+		return "", err
 	}
-	if ctx.class == nil {
-		return "", fmt.Errorf("unsupported instance field access from Java interface %s", expression.Symbol)
-	}
-	if field.class.file.Package != ctx.class.file.Package {
-		return "", fmt.Errorf("cross-package field access requires a Java access bridge for %s", expression.Symbol)
-	}
-	receiver, found := ctx.class.memberReceiver(field.class)
-	if !found {
-		return "", fmt.Errorf("field %s is outside the current class hierarchy", expression.Symbol)
-	}
-	return receiver + ".javaField" + field.declaration.Name, nil
+	return field.read(field.checkedReceiver(field.receiver)), nil
 }
 
 func (ctx javaObjectContext) invoke(expression *JavaExpression) (string, error) {

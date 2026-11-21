@@ -23,6 +23,10 @@ func (ctx javaObjectContext) assignment(expression *JavaExpression, asValue bool
 	if expression.Right == nil {
 		return "", fmt.Errorf("missing attributed Java assignment value")
 	}
+	left := javaMutationOperand(expression.Left)
+	if left != nil && left.Kind == "FIELD" && !left.Static {
+		return ctx.assignInstanceField(left, expression.Right)
+	}
 	target, err := ctx.mutationTarget(expression.Left)
 	if err != nil {
 		return "", err
@@ -51,6 +55,7 @@ func (ctx javaObjectContext) increment(expression *JavaExpression) (string, erro
 }
 
 func (ctx javaObjectContext) updateVariable(target, operand *JavaExpression, operator string, postfix bool) (string, error) {
+	target = javaMutationOperand(target)
 	if target == nil || operand == nil {
 		return "", fmt.Errorf("missing attributed Java update target or operand")
 	}
@@ -64,6 +69,17 @@ func (ctx javaObjectContext) updateVariable(target, operand *JavaExpression, ope
 		setup = fmt.Sprintf("\tjavaUpdateArray := %s\n\tjavaUpdateIndex := %s\n", value, index)
 		load = ctx.arrayGet("javaUpdateArray", "javaUpdateIndex", component)
 		store = ctx.arraySet("javaUpdateArray", "javaUpdateIndex", component, "javaUpdateNew")
+	} else if target.Kind == "FIELD" && !target.Static {
+		field, err := ctx.instanceField(target)
+		if err != nil {
+			return "", err
+		}
+		setup = "\tjavaUpdateReceiver := " + field.checkedReceiver(field.receiver) + "\n"
+		load = field.read("javaUpdateReceiver")
+		store, err = field.write("javaUpdateReceiver", "javaUpdateNew")
+		if err != nil {
+			return "", err
+		}
 	} else {
 		addressable, err := ctx.mutationTarget(target)
 		if err != nil {
@@ -84,6 +100,13 @@ func (ctx javaObjectContext) updateVariable(target, operand *JavaExpression, ope
 	// operand. An array load checks null and bounds at this point too.
 	return fmt.Sprintf("func() %s {\n%s\tjavaUpdateOld := %s\n\tjavaUpdateNew := %s\n\t%s\n\treturn %s\n}()",
 		ctx.program.objectGoType(javaType), setup, load, value, store, result), nil
+}
+
+func javaMutationOperand(expression *JavaExpression) *JavaExpression {
+	for expression != nil && expression.Kind == "PARENTHESIZED" {
+		expression = expression.Operand
+	}
+	return expression
 }
 
 func (ctx javaObjectContext) updatedValue(target string, operand *JavaExpression, operator string) (string, error) {
@@ -142,10 +165,6 @@ func (ctx javaObjectContext) mutationTarget(target *JavaExpression) (string, err
 		return ctx.mutationTarget(target.Operand)
 	case "IDENTIFIER", "LOCAL_VARIABLE", "CATCH_PARAMETER":
 		return ctx.expression(target)
-	case "FIELD":
-		if !target.Static {
-			return ctx.field(target)
-		}
 	}
 	return "", fmt.Errorf("unsupported Java mutation target %s", target.Kind)
 }

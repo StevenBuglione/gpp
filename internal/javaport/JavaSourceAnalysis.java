@@ -457,7 +457,11 @@ class JavaSourceAnalysis {
                     attributes += ",\"target\":" + executableExpression(target);
                 } else {
                     kind = "FIELD";
-                    attributes += fieldExpression(field, receiver(path, selector.getExpression()));
+                    String fieldReceiver = receiver(path, selector.getExpression());
+                    attributes += fieldExpression(field, fieldReceiver);
+                    if (fieldReceiver.equals("other")) {
+                        attributes += ",\"target\":" + executableExpression(target);
+                    }
                 }
             } else if (tree instanceof MethodInvocationTree call) {
                 var callee = call.getMethodSelect();

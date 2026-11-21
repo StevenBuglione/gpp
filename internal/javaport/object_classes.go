@@ -213,7 +213,7 @@ func (program *javaObjectProgram) addMember(class *javaObjectClass, declaration 
 				exports[name] = true
 			}
 		} else {
-			if !hasOnlyModifiers(declaration, "PRIVATE", "PROTECTED", "FINAL") {
+			if !hasOnlyModifiers(declaration, "PUBLIC", "PRIVATE", "PROTECTED", "FINAL") {
 				return fmt.Errorf("unsupported instance field modifiers")
 			}
 			if declaration.Initializer != nil {
