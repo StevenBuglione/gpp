@@ -1184,10 +1184,10 @@ func constructorExprNode(call *CallExpr, context constructorContext) (ExprNode, 
 			guard = &SelectorExpr{Receiver: &NameExpr{Name: target.Qualifier}, Name: name}
 		}
 	}
-	if len(constructorInitializers) == 0 && guard == nil {
+	bindOwner := len(classParentNames(class)) != 0 && context.Introspection != nil && context.Introspection.Enabled
+	if len(constructorInitializers) == 0 && guard == nil && !bindOwner {
 		return instance, true, nil
 	}
-	bindOwner := len(classParentNames(class)) != 0 && context.Introspection != nil && context.Introspection.Enabled
 	return constructorInitializationExpr(name, instance, constructorInitializers, bindOwner, guard), true, nil
 }
 

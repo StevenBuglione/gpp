@@ -3711,7 +3711,8 @@ func MakePerson() web.Person {
 	for _, expected := range []string{
 		"func SpeakFor(person web.GppPerson) string",
 		"func MakePerson() web.GppPerson",
-		"return &web.Employee{}",
+		"return func() *web.Employee",
+		"__gpp_instance := &web.Employee{}",
 	} {
 		if !strings.Contains(string(generated), expected) {
 			t.Fatalf("cross-package polymorphism missing %q:\n%s", expected, generated)

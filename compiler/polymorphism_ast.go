@@ -570,6 +570,11 @@ func polymorphismCallResultType(call *CallExpr, context constructorContext, valu
 	var candidates []callableSignature
 	staticReceiverType := ""
 	switch callee := call.Callee.(type) {
+	case *FunctionLiteralExpr:
+		if callee.Type != nil && len(callee.Type.Results) == 1 {
+			result, _ := typeNodeSource(callee.Type.Results[0])
+			return result
+		}
 	case *NameExpr:
 		if target, ok := context.Targets[callee.Name]; ok && target.Class != nil {
 			return callee.Name
@@ -756,7 +761,9 @@ func lowerPolymorphismBlockNode(block *BlockStmt, context constructorContext) er
 		if dispatchResult && !polymorphismCompatibleDerived(derived, resultBase, context) {
 			return
 		}
-		returnStatement.Values[0] = polymorphismAddressOf(value)
+		if !strings.HasPrefix(strings.TrimSpace(polymorphismExpressionType(value, context, valueTypes)), "*") {
+			returnStatement.Values[0] = polymorphismAddressOf(value)
+		}
 	}
 	lowerStatement = func(statement Stmt) error {
 		if statement == nil || isNilStmt(statement) {

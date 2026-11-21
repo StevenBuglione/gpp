@@ -988,7 +988,7 @@ func main() {
 	if !strings.Contains(generated, "type __gpp_Person interface") {
 		t.Fatalf("base dispatch interface was not generated:\n%s", code)
 	}
-	if !strings.Contains(generated, "var person __gpp_Person = &Employee{}") {
+	if !strings.Contains(generated, "var person __gpp_Person = func() *Employee") {
 		t.Fatalf("base-typed assignment was not lowered:\n%s", code)
 	}
 }
@@ -1027,7 +1027,7 @@ func MakePerson() Person {
 	for _, expected := range []string{
 		"func SpeakFor(person __gpp_Person) string",
 		"func MakePerson() __gpp_Person",
-		"return &Employee{}",
+		"return func() *Employee",
 	} {
 		if !strings.Contains(generated, expected) {
 			t.Fatalf("generated code did not contain %q:\n%s", expected, code)
@@ -1065,7 +1065,7 @@ func main() {
 	generated := string(code)
 	for _, expected := range []string{
 		"func SpeakFor(person __gpp_Person) string",
-		"_ = SpeakFor(&Employee{})",
+		"_ = SpeakFor(func() *Employee",
 	} {
 		if !strings.Contains(generated, expected) {
 			t.Fatalf("derived argument was not coerced for a base parameter, missing %q:\n%s", expected, code)
@@ -1104,7 +1104,7 @@ func main() {
 	generated := string(code)
 	for _, expected := range []string{
 		"func (this *Person) Use(other __gpp_Person) string",
-		"_ = person.Use(&Employee{})",
+		"_ = person.Use(func() *Employee",
 	} {
 		if !strings.Contains(generated, expected) {
 			t.Fatalf("derived method argument was not coerced, missing %q:\n%s", expected, code)
@@ -1214,7 +1214,7 @@ func main() {
 		t.Fatal(err)
 	}
 
-	if !strings.Contains(string(code), "Holder{Value: &Employee{}}") {
+	if !strings.Contains(string(code), "Holder{Value: func() *Employee") {
 		t.Fatalf("polymorphic constructor field was not lowered to a pointer:\n%s", code)
 	}
 }
@@ -1633,7 +1633,7 @@ func main() {
 	generated := string(code)
 	for _, expected := range []string{
 		"func MakeEmployee() *Employee",
-		"return &Employee{}",
+		"return func() *Employee",
 		"func SpeakFor(person __gpp_Person) string",
 		"_ = SpeakFor(MakeEmployee())",
 	} {
@@ -1680,7 +1680,7 @@ func main() {
 	generated := string(code)
 	for _, expected := range []string{
 		"func (this *Factory) Make() *Employee",
-		"return &Employee{}",
+		"return func() *Employee",
 		"_ = SpeakFor(factory.Make())",
 	} {
 		if !strings.Contains(generated, expected) {

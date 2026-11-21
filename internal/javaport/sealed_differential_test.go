@@ -201,9 +201,8 @@ func TestNativeGPPSealedClassesMatchJava(t *testing.T) {
 	writeTestFile(t, base, `package reference.sealed.base
 
 sealed class Root permits reference.sealed.child.Fixed, reference.sealed.child.Open {
-    func init() {}
-    func Read() int32 { return this._code() }
-    func _code() int32 { return 1 }
+    func Read() int32 { return this.Code() }
+    func Code() int32 { return 1 }
 }
 func BuildRoot() *Root { return Root() }
 
@@ -217,13 +216,13 @@ func BuildImplicit() *Implicit { return Implicit() }
 import ancestor "example.com/native-sealing/reference/sealed/base"
 
 final class Fixed : ancestor.Root {
-    func _code() int32 { return 2 }
+    func Code() int32 { return 2 }
 }
 non-sealed class Open : ancestor.Root {
-    func _code() int32 { return 3 }
+    func Code() int32 { return 3 }
 }
 class Extra : Open {
-    func _code() int32 { return 4 }
+    func Code() int32 { return 4 }
 }
 func BuildFixed() *Fixed { return Fixed() }
 func BuildOpen() *Open { return Open() }
