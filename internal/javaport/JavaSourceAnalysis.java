@@ -786,8 +786,7 @@ class JavaSourceAnalysis {
                 ",\"name\":" + quote(element.getSimpleName().toString()) +
                 ",\"owner\":" + quote(owner) + ",\"modifiers\":[" + modifiers + "]" +
                 ",\"annotationCount\":" + element.getAnnotationMirrors().size() +
-                ",\"annotations\":[" + element.getAnnotationMirrors().stream()
-                    .map(this::annotationRecord).collect(Collectors.joining(",")) + "]";
+                ",\"annotations\":" + annotationList(element);
             if (element instanceof Parameterizable parameterizable) {
                 var parameters = parameterizable.getTypeParameters().stream().map(parameter ->
                     "{\"name\":" + quote(parameter.getSimpleName().toString()) +
@@ -798,6 +797,10 @@ class JavaSourceAnalysis {
                 var parameters = method.getParameters().stream().map(this::parameterRecord).collect(Collectors.joining(","));
                 var thrown = method.getThrownTypes().stream().map(type -> quote(type.toString()))
                     .collect(Collectors.joining(","));
+                if (method.getParameters().stream().anyMatch(parameter -> !parameter.getAnnotationMirrors().isEmpty())) {
+                    result += ",\"parameterAnnotations\":[" + method.getParameters().stream()
+                        .map(this::annotationList).collect(Collectors.joining(",")) + "]";
+                }
                 if (method.getDefaultValue() != null) {
                     result += ",\"annotationDefault\":" + annotationValue(method.getDefaultValue());
                 }
@@ -899,11 +902,17 @@ class JavaSourceAnalysis {
             return "[" + types.stream().map(this::typeRecord).collect(Collectors.joining(",")) + "]";
         }
 
+        private String annotationList(Element element) {
+            return "[" + element.getAnnotationMirrors().stream()
+                .map(this::annotationRecord).collect(Collectors.joining(",")) + "]";
+        }
+
         private String annotationRecord(AnnotationMirror annotation) {
             var explicit = annotation.getElementValues();
             var members = elements.getElementValuesWithDefaults(annotation).entrySet().stream()
                 .sorted(Comparator.comparing(entry -> entry.getKey().getSimpleName().toString()))
                 .map(entry -> "{\"name\":" + quote(entry.getKey().getSimpleName().toString()) +
+                    ",\"type\":" + quote(entry.getKey().getReturnType().toString()) +
                     ",\"explicit\":" + explicit.containsKey(entry.getKey()) +
                     ",\"value\":" + annotationValue(entry.getValue()) + "}")
                 .collect(Collectors.joining(","));
@@ -946,10 +955,14 @@ class JavaSourceAnalysis {
                 return scalarValue("ENUM_CONSTANT", symbol(member));
             }
             if (value instanceof TypeMirror type) {
-                return scalarValue("CLASS_LITERAL", type.toString());
+                return scalarValue("CLASS_LITERAL", expressionType(type));
             }
             if (value instanceof Character character) {
                 return scalarValue("CHAR", Integer.toString(character));
+            }
+            if (value instanceof String text) {
+                return "{\"kind\":\"STRING\",\"text\":" + quote(text) +
+                    ",\"utf16LE\":" + quote(utf16LittleEndian(text)) + "}";
             }
             return scalarValue(value.getClass().getSimpleName().toUpperCase(Locale.ROOT), value.toString());
         }

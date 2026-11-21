@@ -127,6 +127,7 @@ type Occurrence struct {
 	ConstantUTF16LE          *string          `json:"constantUtf16LE,omitempty"`
 	AnnotationCount          int              `json:"annotationCount,omitempty"`
 	Annotations              []Annotation     `json:"annotations,omitempty"`
+	ParameterAnnotations     [][]Annotation   `json:"parameterAnnotations,omitempty"`
 	AnnotationDefault        *AnnotationValue `json:"annotationDefault,omitempty"`
 	ModuleName               string           `json:"moduleName,omitempty"`
 	TypeDescription          *TypeDescription `json:"typeDescription,omitempty"`
@@ -269,6 +270,7 @@ type Annotation struct {
 
 type AnnotationPair struct {
 	Name     string          `json:"name"`
+	Type     string          `json:"type,omitempty"`
 	Explicit bool            `json:"explicit"`
 	Value    AnnotationValue `json:"value"`
 }
@@ -276,6 +278,7 @@ type AnnotationPair struct {
 type AnnotationValue struct {
 	Kind       string            `json:"kind"`
 	Text       string            `json:"text,omitempty"`
+	UTF16LE    *string           `json:"utf16LE,omitempty"`
 	Annotation *Annotation       `json:"annotation,omitempty"`
 	Elements   []AnnotationValue `json:"elements,omitempty"`
 }

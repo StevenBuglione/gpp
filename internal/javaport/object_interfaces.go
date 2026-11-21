@@ -32,13 +32,9 @@ type javaInterfaceMethod struct {
 }
 
 func (program *javaObjectProgram) addInterface(file SourceFile, declaration Occurrence, permitted bool) error {
-	annotationsSupported := !slices.ContainsFunc(declaration.Annotations, func(annotation Annotation) bool {
-		return annotation.Retention != "SOURCE" && annotation.Type != "java.lang.FunctionalInterface"
-	})
 	visible := slices.Contains(declaration.Modifiers, "PUBLIC") || permitted || javaIsSealed(declaration)
-	if !token.IsExported(declaration.Name) || !token.IsIdentifier(declaration.Name) ||
-		!hasOnlyModifiers(declaration, "PUBLIC", "ABSTRACT", "SEALED", "NON_SEALED") || !visible ||
-		!annotationsSupported {
+	if !token.IsExported(declaration.Name) || !token.IsIdentifier(declaration.Name) || !visible ||
+		!hasOnlyModifiers(declaration, "PUBLIC", "ABSTRACT", "SEALED", "NON_SEALED") {
 		return fmt.Errorf("expected a public Java interface")
 	}
 	if program.exports[file.Package][declaration.Name] {
@@ -52,9 +48,6 @@ func (program *javaObjectProgram) addInterface(file SourceFile, declaration Occu
 }
 
 func (program *javaObjectProgram) addInterfaceMember(iface *javaInterface, declaration Occurrence) error {
-	if !onlySourceAnnotations(declaration) {
-		return fmt.Errorf("unsupported Java interface member annotations")
-	}
 	switch declaration.Kind {
 	case "METHOD":
 		abstract := slices.Contains(declaration.Modifiers, "ABSTRACT")

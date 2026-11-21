@@ -66,6 +66,8 @@ type javaObjectProgram struct {
 	interfaceMethods  map[string]*javaInterfaceMethod
 	lambdaAdapters    map[string]*javaLambdaAdapter
 	lambdaNext        int
+	annotationTypes   map[string]*javaAnnotationType
+	annotationMembers map[string][]Occurrence
 }
 
 func emitJavaObjects(report Report) (string, error) {
@@ -86,6 +88,7 @@ func prepareJavaObjects(files []SourceFile) (*javaObjectProgram, error) {
 		classes: map[string]*javaObjectClass{}, methods: map[string]*javaObjectMethod{},
 		fields: map[string]javaObjectField{}, pending: map[string]bool{}, exports: map[string]map[string]bool{},
 		interfaces: map[string]*javaInterface{}, interfaceMethods: map[string]*javaInterfaceMethod{},
+		annotationTypes: map[string]*javaAnnotationType{}, annotationMembers: map[string][]Occurrence{},
 	}
 	var classes []*javaObjectClass
 	permitted := map[string]bool{}
@@ -107,6 +110,13 @@ func prepareJavaObjects(files []SourceFile) (*javaObjectProgram, error) {
 			if declaration.Owner != "" {
 				continue
 			}
+			if declaration.Kind == "ANNOTATION_TYPE" {
+				if !token.IsIdentifier(declaration.Name) {
+					return nil, unsupportedSource(file, declaration, "unsupported Go annotation declaration name")
+				}
+				program.annotationTypes[declaration.Symbol] = &javaAnnotationType{file: file, declaration: declaration, storagePackage: file.Package}
+				continue
+			}
 			declaration = eraseJavaObjectDeclaration(declaration)
 			if declaration.Kind == "INTERFACE" {
 				if err := program.addInterface(file, declaration, permitted[declaration.Symbol]); err != nil {
@@ -119,8 +129,7 @@ func prepareJavaObjects(files []SourceFile) (*javaObjectProgram, error) {
 			}
 			visible := slices.Contains(declaration.Modifiers, "PUBLIC") || permitted[declaration.Symbol] || javaIsSealed(declaration)
 			if !token.IsExported(declaration.Name) || !token.IsIdentifier(declaration.Name) || !visible ||
-				!hasOnlyModifiers(declaration, "PUBLIC", "FINAL", "ABSTRACT", "SEALED", "NON_SEALED") ||
-				!onlySourceAnnotations(declaration) {
+				!hasOnlyModifiers(declaration, "PUBLIC", "FINAL", "ABSTRACT", "SEALED", "NON_SEALED") {
 				return nil, unsupportedSource(file, declaration, "expected a public class with at most one superclass")
 			}
 			if program.exports[file.Package][declaration.Name] {
@@ -137,10 +146,20 @@ func prepareJavaObjects(files []SourceFile) (*javaObjectProgram, error) {
 	}
 	for _, file := range files {
 		for _, declaration := range file.Declarations {
-			if (declaration.Kind == "CLASS" || declaration.Kind == "INTERFACE" || declaration.Kind == "RECORD") && declaration.Owner == "" {
+			if (declaration.Kind == "CLASS" || declaration.Kind == "INTERFACE" || declaration.Kind == "RECORD" || declaration.Kind == "ANNOTATION_TYPE") && declaration.Owner == "" {
 				continue
 			}
 			owner := declaration.Owner
+			if annotation := program.annotationTypes[owner]; annotation != nil {
+				if declaration.Kind != "METHOD" || len(declaration.Parameters) != 0 || !token.IsIdentifier(declaration.Name) {
+					return nil, unsupportedSource(file, declaration, "unsupported Java annotation type member")
+				}
+				annotation.members = append(annotation.members, declaration)
+				continue
+			}
+			if declarationHasRuntimeAnnotations(declaration) {
+				program.annotationMembers[owner] = append(program.annotationMembers[owner], declaration)
+			}
 			declaration = eraseJavaObjectDeclaration(declaration)
 			if declaration.Kind == "BLOCK" {
 				owner = declaration.InitializerOwner
@@ -152,8 +171,8 @@ func prepareJavaObjects(files []SourceFile) (*javaObjectProgram, error) {
 				continue
 			}
 			class, ok := program.classes[owner]
-			if !ok || !onlySourceAnnotations(declaration) {
-				return nil, unsupportedSource(file, declaration, "nested, annotated, or non-class declaration")
+			if !ok {
+				return nil, unsupportedSource(file, declaration, "nested or non-class declaration")
 			}
 			if err := program.addMember(class, declaration); err != nil {
 				return nil, unsupportedSource(file, declaration, err.Error())
@@ -214,7 +233,7 @@ func prepareJavaObjects(files []SourceFile) (*javaObjectProgram, error) {
 			}
 		}
 	}
-	return program, nil
+	return program, program.reserveAnnotationExports()
 }
 
 func (program *javaObjectProgram) addMember(class *javaObjectClass, declaration Occurrence) error {
@@ -437,15 +456,6 @@ func (class *javaObjectClass) addVirtualMethod(method *javaObjectMethod) error {
 func hasOnlyModifiers(declaration Occurrence, permitted ...string) bool {
 	for _, modifier := range declaration.Modifiers {
 		if !slices.Contains(permitted, modifier) {
-			return false
-		}
-	}
-	return true
-}
-
-func onlySourceAnnotations(declaration Occurrence) bool {
-	for _, annotation := range declaration.Annotations {
-		if annotation.Retention != "SOURCE" {
 			return false
 		}
 	}

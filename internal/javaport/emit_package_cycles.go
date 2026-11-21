@@ -33,6 +33,12 @@ func (program *javaObjectProgram) emitPackageCycles(units map[string]EmittedPack
 				iface.symbolPrefix = fmt.Sprintf("J%d_", index)
 			}
 		}
+		for _, annotation := range program.annotationTypes {
+			if index, found := slices.BinarySearch(members, annotation.file.Package); found {
+				annotation.storagePackage = storage
+				annotation.symbolPrefix = fmt.Sprintf("J%d_", index)
+			}
+		}
 		implementation, err := program.emitPackage(storage)
 		if err != nil {
 			return err
@@ -54,6 +60,7 @@ func (program javaObjectProgram) emitPackageFacade(name, storage string) (emitte
 	program.facadeOf = storage
 	program.imports = map[string]string{}
 	var source strings.Builder
+	program.emitAnnotationFacade(&source, name, storage)
 	for _, iface := range program.interfaceLayout {
 		if iface.file.Package != name {
 			continue

@@ -1,0 +1,220 @@
+package gpp.java
+
+// AnnotationClassLiteral and AnnotationEnumConstant preserve the Java names
+// even when the referenced classes belong to a dependency outside this build.
+type AnnotationClassLiteral string
+
+type AnnotationEnumConstant struct {
+    Type string
+    Name string
+}
+
+type AnnotationMember struct {
+    name string
+    javaType string
+    value any
+    explicit bool
+    hasValue bool
+}
+
+func NewAnnotationMember(name, javaType string, value any, explicit, hasValue bool) AnnotationMember {
+    return AnnotationMember{name, javaType, copyAnnotationValue(value), explicit, hasValue}
+}
+
+func (member AnnotationMember) Name() string { return member.name }
+func (member AnnotationMember) JavaType() string { return member.javaType }
+func (member AnnotationMember) Explicit() bool { return member.explicit }
+func (member AnnotationMember) HasValue() bool { return member.hasValue }
+func (member AnnotationMember) Value() any { return copyAnnotationValue(member.value) }
+
+func copyAnnotationValue(value any) any {
+    elements, array := value.([]any)
+    if !array {
+        return value
+    }
+    copied := make([]any, len(elements))
+    for index, element := range elements {
+        copied[index] = copyAnnotationValue(element)
+    }
+    return copied
+}
+
+type Annotation struct {
+    binaryName string
+    members []AnnotationMember
+    declaration func() AnnotationType
+}
+
+func NewAnnotation(binaryName string, members []AnnotationMember, declaration func() AnnotationType) Annotation {
+    return Annotation{binaryName, append([]AnnotationMember(nil), members...), declaration}
+}
+
+func (annotation Annotation) GppAnnotationFullName() string { return annotation.binaryName }
+
+func (annotation Annotation) Type() (AnnotationType, bool) {
+    if annotation.declaration == nil {
+        return AnnotationType{}, false
+    }
+    return annotation.declaration(), true
+}
+
+func (annotation Annotation) Members() []AnnotationMember {
+    return append([]AnnotationMember(nil), annotation.members...)
+}
+
+func (annotation Annotation) Member(name string) (AnnotationMember, bool) {
+    for _, member := range annotation.members {
+        if member.name == name {
+            return member, true
+        }
+    }
+    return AnnotationMember{}, false
+}
+
+type AnnotationType struct {
+    binaryName string
+    retention string
+    container string
+    inherited bool
+    members []AnnotationMember
+    annotations AnnotatedElement
+}
+
+func NewAnnotationType(binaryName, retention, container string, inherited bool, members []AnnotationMember, annotations AnnotatedElement) AnnotationType {
+    return AnnotationType{binaryName, retention, container, inherited, append([]AnnotationMember(nil), members...), annotations}
+}
+
+func (annotation AnnotationType) GppAnnotationFullName() string { return annotation.binaryName }
+func (annotation AnnotationType) Retention() string { return annotation.retention }
+func (annotation AnnotationType) RepeatableContainer() string { return annotation.container }
+func (annotation AnnotationType) IsInherited() bool { return annotation.inherited }
+func (annotation AnnotationType) Annotations() AnnotatedElement { return annotation.annotations }
+
+func (annotation AnnotationType) Members() []AnnotationMember {
+    return append([]AnnotationMember(nil), annotation.members...)
+}
+
+type AnnotatedMember struct {
+    symbol string
+    annotations AnnotatedElement
+    parameters []AnnotatedElement
+}
+
+func NewAnnotatedMember(symbol string, annotations AnnotatedElement, parameters []AnnotatedElement) AnnotatedMember {
+    return AnnotatedMember{symbol, annotations, append([]AnnotatedElement(nil), parameters...)}
+}
+
+func (member AnnotatedMember) Symbol() string { return member.symbol }
+func (member AnnotatedMember) Annotations() AnnotatedElement { return member.annotations }
+func (member AnnotatedMember) Parameters() []AnnotatedElement {
+    return append([]AnnotatedElement(nil), member.parameters...)
+}
+
+type AnnotatedElement struct {
+    declared []Annotation
+    parent func() AnnotatedElement
+    members []AnnotatedMember
+}
+
+func NewAnnotatedElement(declared []Annotation, parent func() AnnotatedElement, members []AnnotatedMember) AnnotatedElement {
+    return AnnotatedElement{append([]Annotation(nil), declared...), parent, append([]AnnotatedMember(nil), members...)}
+}
+
+func (element AnnotatedElement) Members() []AnnotatedMember {
+    return append([]AnnotatedMember(nil), element.members...)
+}
+
+func (element AnnotatedElement) Member(symbol string) (AnnotatedMember, bool) {
+    for _, member := range element.members {
+        if member.symbol == symbol {
+            return member, true
+        }
+    }
+    return AnnotatedMember{}, false
+}
+
+func (element AnnotatedElement) GetDeclaredAnnotations() []Annotation {
+    return append([]Annotation(nil), element.declared...)
+}
+
+func (element AnnotatedElement) FindDeclaredAnnotation(binaryName string) (Annotation, bool) {
+    for _, annotation := range element.declared {
+        if annotation.binaryName == binaryName {
+            return annotation, true
+        }
+    }
+    return Annotation{}, false
+}
+
+func (element AnnotatedElement) GetDeclaredAnnotation(kind AnnotationType) (Annotation, bool) {
+    return element.FindDeclaredAnnotation(kind.binaryName)
+}
+
+func (element AnnotatedElement) GetAnnotation(kind AnnotationType) (Annotation, bool) {
+    for {
+        annotation, exists := element.GetDeclaredAnnotation(kind)
+        if exists || !kind.inherited || element.parent == nil {
+            return annotation, exists
+        }
+        element = element.parent()
+    }
+}
+
+func (element AnnotatedElement) GetDeclaredAnnotationsByType(kind AnnotationType) []Annotation {
+    var annotations []Annotation
+    for _, annotation := range element.declared {
+        switch annotation.binaryName {
+        case kind.binaryName:
+            annotations = append(annotations, annotation)
+        case kind.container:
+            member, exists := annotation.Member("value")
+            if !exists {
+                continue
+            }
+            values, ok := member.value.([]any)
+            if !ok {
+                continue
+            }
+            for _, value := range values {
+                if nested, ok := value.(Annotation); ok && nested.binaryName == kind.binaryName {
+                    annotations = append(annotations, nested)
+                }
+            }
+        }
+    }
+    return annotations
+}
+
+func (element AnnotatedElement) GetAnnotationsByType(kind AnnotationType) []Annotation {
+    for {
+        annotations := element.GetDeclaredAnnotationsByType(kind)
+        if len(annotations) != 0 || !kind.inherited || element.parent == nil {
+            return annotations
+        }
+        element = element.parent()
+    }
+}
+
+// FindMetaAnnotation searches declared annotations and then their own types.
+// A visited set bounds legal cyclic Java meta-annotation graphs.
+func (element AnnotatedElement) FindMetaAnnotation(binaryName string) (Annotation, bool) {
+    return element.findMetaAnnotation(binaryName, map[string]bool{})
+}
+
+func (element AnnotatedElement) findMetaAnnotation(binaryName string, visited map[string]bool) (Annotation, bool) {
+    if annotation, found := element.FindDeclaredAnnotation(binaryName); found {
+        return annotation, true
+    }
+    for _, annotation := range element.declared {
+        if visited[annotation.binaryName] {
+            continue
+        }
+        visited[annotation.binaryName] = true
+        if kind, exists := annotation.Type(); exists {
+            if match, found := kind.annotations.findMetaAnnotation(binaryName, visited); found {
+                return match, true
+            }
+        }
+    }
+    return Annotation{}, false
+}

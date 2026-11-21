@@ -78,7 +78,8 @@ func EmitGPPPackages(report Report) ([]EmittedPackage, error) {
 func packageHasJavaTypes(files []SourceFile) bool {
 	for _, file := range files {
 		for _, declaration := range file.Declarations {
-			if declaration.Owner == "" && (declaration.Kind == "CLASS" || declaration.Kind == "INTERFACE" || declaration.Kind == "RECORD") {
+			if declaration.Owner == "" && (declaration.Kind == "CLASS" || declaration.Kind == "INTERFACE" ||
+				declaration.Kind == "RECORD" || declaration.Kind == "ANNOTATION_TYPE") {
 				return true
 			}
 		}
@@ -112,6 +113,9 @@ func (program javaObjectProgram) emitPackage(name string) (emittedObjectPackage,
 		}
 	}
 	program.emitLambdaAdapters(&source)
+	if err := program.emitAnnotationMetadata(&source); err != nil {
+		return emittedObjectPackage{}, err
+	}
 	return program.finishPackage(&source)
 }
 
