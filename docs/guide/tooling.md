@@ -156,10 +156,14 @@ gpp migrate java --emit-gpp --out-dir translated --release 17 src/main/java
 gpp compile -module example.com/migrated -output generated translated
 ```
 
-Batch translation supports acyclic dependencies between supported classes,
-including cross-package inheritance and public instance calls. It reports
-cycles in generated Go imports and identifies their member packages. Java
-module descriptors still require separate handling.
+Batch translation supports cross-package inheritance, public instance calls,
+and cycles between supported classes. Each group of mutually dependent
+packages shares an implementation under `internal/gppjavaport`. The original
+packages expose Go type aliases, constructor functions, and constants. Go
+callers use the original import paths and share the same object pointers as
+the translated code. Go reflection reports where each aliased type is defined,
+so it reports the internal implementation's name. Java module descriptors
+still require separate handling.
 
 Translated methods and constructors can use Java `throw`, typed `catch`,
 multi-catch, and `finally` with the exception classes provided by `gpp/java`.

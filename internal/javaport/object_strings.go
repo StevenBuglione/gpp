@@ -11,7 +11,7 @@ const javaStringType = "java.lang.String"
 
 func (program *javaObjectProgram) objectGoType(javaType string) string {
 	if class := program.classes[javaType]; class != nil {
-		return "*" + program.qualify(class.file.Package, class.declaration.Name)
+		return "*" + program.classReference(class, class.declaration.Name)
 	}
 	goType := program.mappedObjectType(javaType)
 	program.runtime = program.runtime || strings.Contains(goType, "javart.")

@@ -10,6 +10,8 @@ import (
 type javaObjectClass struct {
 	file                   SourceFile
 	declaration            Occurrence
+	storagePackage         string
+	symbolPrefix           string
 	parent                 *javaObjectClass
 	fields                 []Occurrence
 	initializers           []Occurrence
@@ -39,15 +41,16 @@ type javaObjectField struct {
 }
 
 type javaObjectProgram struct {
-	classes map[string]*javaObjectClass
-	methods map[string]*javaObjectMethod
-	fields  map[string]javaObjectField
-	layout  []*javaObjectClass
-	pending map[string]bool
-	exports map[string]map[string]bool
-	pkg     string
-	imports map[string]string
-	runtime bool
+	classes  map[string]*javaObjectClass
+	methods  map[string]*javaObjectMethod
+	fields   map[string]javaObjectField
+	layout   []*javaObjectClass
+	pending  map[string]bool
+	exports  map[string]map[string]bool
+	pkg      string
+	facadeOf string
+	imports  map[string]string
+	runtime  bool
 }
 
 func emitJavaObjects(report Report) (string, error) {
@@ -88,7 +91,7 @@ func prepareJavaObjects(files []SourceFile) (*javaObjectProgram, error) {
 			if program.exports[file.Package][declaration.Name] {
 				return nil, unsupportedSource(file, declaration, "duplicate Go class name")
 			}
-			class := &javaObjectClass{file: file, declaration: declaration}
+			class := &javaObjectClass{file: file, declaration: declaration, storagePackage: file.Package}
 			classes = append(classes, class)
 			program.classes[declaration.Symbol] = class
 			program.exports[file.Package][declaration.Name] = true
@@ -382,9 +385,19 @@ func objectViewName(class *javaObjectClass) string {
 
 func (class *javaObjectClass) baseField() string {
 	if class.file.Package != class.parent.file.Package {
-		return "javaImportedBase" + class.declaration.Name
+		return "javaImportedBase" + class.storageName(class.declaration.Name)
 	}
-	return "javaBase" + class.parent.declaration.Name
+	return "javaBase" + class.parent.storageName(class.parent.declaration.Name)
+}
+
+func (class *javaObjectClass) storageName(name string) string {
+	if class.symbolPrefix == "" {
+		return name
+	}
+	if !token.IsExported(name) {
+		return "java" + class.symbolPrefix + name
+	}
+	return class.symbolPrefix + name
 }
 
 func (method *javaObjectMethod) bridgeName(operation string) string {

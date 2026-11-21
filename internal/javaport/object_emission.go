@@ -10,13 +10,13 @@ import (
 )
 
 func (program *javaObjectProgram) emitClass(out *strings.Builder, class *javaObjectClass) error {
-	name := class.declaration.Name
+	name := class.storageName(class.declaration.Name)
 	if class.parent != nil && class.parent.file.Package != class.file.Package {
 		fmt.Fprintf(out, "\ntype %s = %s\n", class.baseField(),
-			program.qualify(class.parent.file.Package, class.parent.declaration.Name))
+			program.classReference(class.parent, class.parent.declaration.Name))
 	}
 	for _, field := range class.fields {
-		if !slices.Contains(field.Modifiers, "STATIC") || !slices.Contains(field.Modifiers, "PUBLIC") {
+		if !javaPublicConstant(field) {
 			continue
 		}
 		if field.Type == javaStringType {
@@ -24,14 +24,14 @@ func (program *javaObjectProgram) emitClass(out *strings.Builder, class *javaObj
 			if err != nil {
 				return unsupportedSource(class.file, field, err.Error())
 			}
-			fmt.Fprintf(out, "\nfunc %s%s() *javart.String { return %s }\n", name, field.Name, literal)
+			fmt.Fprintf(out, "\nfunc %s() *javart.String { return %s }\n", class.constantStorageName(field), literal)
 			continue
 		}
 		literal, err := objectPrimitiveLiteral(field.Type, *field.Constant)
 		if err != nil {
 			return unsupportedSource(class.file, field, err.Error())
 		}
-		fmt.Fprintf(out, "\nconst %s%s = %s\n", name, field.Name, literal)
+		fmt.Fprintf(out, "\nconst %s = %s\n", class.constantStorageName(field), literal)
 	}
 	fmt.Fprintf(out, "\ntype %s struct {\n", name)
 	if class.parent != nil {
@@ -102,7 +102,7 @@ func (program *javaObjectProgram) emitClass(out *strings.Builder, class *javaObj
 }
 
 func (class *javaObjectClass) checkedResultName() string {
-	return "javaCheckedResult" + class.declaration.Name
+	return "javaCheckedResult" + class.storageName(class.declaration.Name)
 }
 
 type javaObjectContext struct {
@@ -115,11 +115,12 @@ type javaObjectContext struct {
 }
 
 func (ctx javaObjectContext) emitConstructor(out *strings.Builder, method *javaObjectMethod) error {
-	name := ctx.class.declaration.Name
+	name := ctx.class.storageName(ctx.class.declaration.Name)
 	declaration := method.declaration
 	parameters, arguments := ctx.program.objectParameterList(declaration.Parameters)
 	ctx.arguments = objectParameterNames(declaration.Parameters)
-	fmt.Fprintf(out, "\nfunc %s(%s) *%s {\n\tthis := new(%s)\n", method.allocatorName(), parameters, name, name)
+	allocator := ctx.class.storageName(method.allocatorName())
+	fmt.Fprintf(out, "\nfunc %s(%s) *%s {\n\tthis := new(%s)\n", allocator, parameters, name, name)
 	// Attach the most-derived implementations before entering any Java constructor.
 	for _, methodName := range slices.Sorted(maps.Keys(ctx.class.virtual)) {
 		implementation := ctx.class.virtual[methodName]
@@ -141,7 +142,7 @@ func (ctx javaObjectContext) emitConstructor(out *strings.Builder, method *javaO
 	}
 	fmt.Fprintf(out, "\tthis.%s(%s)\n\treturn this\n}\n", method.internal, arguments)
 	if method.hasErrorAdapter() {
-		ctx.emitErrorAdapter(out, "", method.errorAdapterName(), parameters, "*"+name, method.goName+"("+arguments+")")
+		ctx.emitErrorAdapter(out, "", ctx.class.storageName(method.errorAdapterName()), parameters, "*"+name, allocator+"("+arguments+")")
 	}
 	if method.crossPackageInit {
 		fmt.Fprintf(out, "\nfunc (this *%s) %s(%s) { this.%s(%s) }\n", name,
@@ -186,7 +187,7 @@ func (ctx javaObjectContext) emitConstructor(out *strings.Builder, method *javaO
 }
 
 func (ctx javaObjectContext) emitMethod(out *strings.Builder, method *javaObjectMethod) error {
-	name := ctx.class.declaration.Name
+	name := ctx.class.storageName(ctx.class.declaration.Name)
 	declaration := method.declaration
 	parameters, arguments := ctx.program.objectParameterList(declaration.Parameters)
 	result := ctx.program.objectResultType(method)

@@ -2,6 +2,7 @@ package javaport
 
 import (
 	"maps"
+	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -138,19 +139,141 @@ func main() {
 	}
 }
 
-func TestJavaBatchDiagnosesGoImportCycles(t *testing.T) {
+func TestJavaPackageCyclesMatchReference(t *testing.T) {
 	java, release := referenceJDK(t)
 	root := t.TempDir()
-	a := filepath.Join(root, "A.java")
-	b := filepath.Join(root, "B.java")
-	writeTestFile(t, a, "package reference.a; public class A { private reference.b.B other; }")
-	writeTestFile(t, b, "package reference.b; public class B { private reference.a.A other; }")
-	report, err := Analyze(t.Context(), []string{a, b}, Options{Java: java, Release: release, MethodBodies: true})
+	for _, directory := range []string{"left", "right", "consumer", "input", "external"} {
+		if err := os.Mkdir(filepath.Join(root, directory), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	left := filepath.Join(root, "left", "Node.java")
+	right := filepath.Join(root, "right", "Node.java")
+	parent := filepath.Join(root, "left", "Parent.java")
+	facade := filepath.Join(root, "consumer", "Facade.java")
+	writeTestFile(t, left, `package reference.left;
+import java.io.IOException;
+public class Node {
+    public static final int KIND = 7;
+    public static final String LABEL = "node";
+    private reference.right.Node peer;
+    public Node(reference.right.Node peer) { this.peer = peer; }
+    public Node(reference.right.Node peer, boolean fail) throws IOException {
+        this(peer);
+        if (fail) { throw new IOException(LABEL); }
+    }
+    public reference.right.Node peer() { return peer; }
+    public int mirror() { return peer.score(); }
+}`)
+	writeTestFile(t, parent, `package reference.left;
+public class Parent {
+    private final int during = score();
+    protected Parent() {}
+    public int during() { return during; }
+    public int score() { return 100; }
+}`)
+	writeTestFile(t, right, `package reference.right;
+import reference.left.Parent;
+public class Node extends Parent {
+    private int setting = 41;
+    private reference.left.Node peer;
+    public Node() {}
+    public void attach(reference.left.Node peer) { this.peer = peer; }
+    public reference.left.Node peer() { return peer; }
+    public reference.left.Node spawn(Node other) { return new reference.left.Node(other); }
+    @Override public int score() { return setting; }
+    public int parentScore() { return super.score(); }
+}`)
+	writeTestFile(t, facade, `package reference.consumer;
+public class Facade {
+    public reference.left.Node connect(reference.right.Node node) { return node.spawn(node); }
+}`)
+	probe := filepath.Join(root, "Probe.java")
+	writeTestFile(t, probe, `import java.io.IOException;
+class Probe {
+    public static void main(String[] args) throws IOException {
+        var right = new reference.right.Node();
+        var left = new reference.consumer.Facade().connect(right);
+        right.attach(left);
+        reference.left.Parent ancestor = right;
+        System.out.println((left.peer() == right) + " " + (right.peer() == left));
+        System.out.println(left.mirror() + " " + ancestor.during() + " " + ancestor.score() + " " + right.parentScore());
+        System.out.println(reference.left.Node.KIND + " " + reference.left.Node.LABEL);
+        try { new reference.left.Node(right, true); }
+        catch (IOException failure) { System.out.println(failure.getMessage() == reference.left.Node.LABEL); }
+    }
+}`)
+	paths := []string{left, right, parent, facade}
+	classes := filepath.Join(root, "classes")
+	javacArgs := append([]string{"--release", strconv.Itoa(release), "-d", classes, probe}, paths...)
+	runObjectTestCommand(t, root, filepath.Join(filepath.Dir(java), "javac"), javacArgs...)
+	want := runObjectTestCommand(t, root, java, "-cp", classes, "Probe")
+	report, err := Analyze(t.Context(), paths, Options{Java: java, Release: release, MethodBodies: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	units, err := EmitGPPPackages(report)
-	if units != nil || err == nil || !strings.Contains(err.Error(), "[reference.a, reference.b]") {
-		t.Fatalf("expected a diagnostic naming the Go import cycle, got %+v with %v", units, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var inputs []string
+	var implementations int
+	for _, unit := range units {
+		if strings.HasPrefix(unit.Name, "internal.gppjavaport.") {
+			implementations++
+		}
+		path := filepath.Join(root, "input", unit.Name+".gpp")
+		writeTestFile(t, path, unit.Source)
+		inputs = append(inputs, path)
+	}
+	if implementations != 1 || len(units) != 4 {
+		t.Fatalf("expected one shared implementation and three public packages, got %+v", units)
+	}
+	generated := filepath.Join(root, "generated")
+	if err := compiler.CompileFilesWithOptions(inputs, generated,
+		compiler.CompileOptions{ModulePath: "example.com/java-cycles"}); err != nil {
+		for _, unit := range units {
+			t.Logf("%s\n%s", unit.Name, unit.Source)
+		}
+		t.Fatal(err)
+	}
+	consumer := filepath.Join(root, "external")
+	writeTestFile(t, filepath.Join(consumer, "go.mod"), `module example.com/consumer
+
+go 1.27
+
+require example.com/java-cycles v0.0.0
+
+replace example.com/java-cycles => ../generated
+`)
+	writeTestFile(t, filepath.Join(consumer, "main.go"), `package main
+import (
+    "errors"
+    "fmt"
+    "example.com/java-cycles/gpp/java"
+    "example.com/java-cycles/reference/consumer"
+    "example.com/java-cycles/reference/left"
+    "example.com/java-cycles/reference/right"
+)
+func main() {
+    r := right.NewNode()
+    var l *left.Node = consumer.NewFacade().Connect(r)
+    r.Attach(l)
+    var ancestor *left.Parent = r.GppAsParent()
+    fmt.Println(l.Peer() == r, r.Peer() == l)
+    fmt.Println(l.Mirror(), ancestor.During(), ancestor.Score(), r.ParentScore())
+    label, _ := left.NodeLABEL().ToGo()
+    fmt.Println(left.NodeKIND, label)
+    if direct := left.NewNodeWithNode(r); direct.Peer() != r { panic("constructor lost the peer") }
+    if direct, err := left.GppNewNodeWithNodeAndBoolean(r, false); err != nil || direct.Peer() != r { panic("adapter lost the peer") }
+    instance, err := left.GppNewNodeWithNodeAndBoolean(r, true)
+    var failure *java.IOException
+    if instance != nil || !errors.As(err, &failure) { panic("missing translated constructor exception") }
+    fmt.Println(failure.GetMessage() == left.NodeLABEL())
+}
+`)
+	got := runObjectTestCommand(t, consumer, "go", "run", "-buildvcs=false", ".")
+	if got != want {
+		t.Fatalf("Go and JDK cyclic package behavior diverged\nGo:\n%s\nJava:\n%s", got, want)
 	}
 }

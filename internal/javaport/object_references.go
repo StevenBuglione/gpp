@@ -43,7 +43,7 @@ func (ctx javaObjectContext) allocateObject(expression *JavaExpression) (string,
 	if err != nil {
 		return "", err
 	}
-	return ctx.program.qualify(constructor.class.file.Package, constructor.allocatorName()) + "(" + args + ")", nil
+	return ctx.program.classReference(constructor.class, constructor.allocatorName()) + "(" + args + ")", nil
 }
 
 func (ctx javaObjectContext) invokeReference(expression *JavaExpression, method *javaObjectMethod) (string, error) {

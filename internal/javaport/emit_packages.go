@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// EmittedPackage maps one Java package to a GPP compilation unit.
+// EmittedPackage describes a named GPP compilation unit from Java migration.
 type EmittedPackage struct {
 	Name   string
 	Source string
@@ -43,7 +43,7 @@ func EmitGPPPackages(report Report) ([]EmittedPackage, error) {
 	if err != nil {
 		return nil, err
 	}
-	units := make([]EmittedPackage, 0, len(names))
+	units := make(map[string]EmittedPackage, len(names))
 	edges := make(map[PackageIdentity]map[PackageIdentity]bool, len(names))
 	for _, name := range names {
 		imports := map[PackageIdentity]bool{}
@@ -53,7 +53,7 @@ func EmitGPPPackages(report Report) ([]EmittedPackage, error) {
 			if err != nil {
 				return nil, err
 			}
-			units = append(units, unit.EmittedPackage)
+			units[name] = unit.EmittedPackage
 			for _, dependency := range unit.dependencies {
 				imports[PackageIdentity{Package: dependency}] = true
 			}
@@ -63,20 +63,16 @@ func EmitGPPPackages(report Report) ([]EmittedPackage, error) {
 		if err != nil {
 			return nil, err
 		}
-		units = append(units, EmittedPackage{Name: name, Source: source})
+		units[name] = EmittedPackage{Name: name, Source: source}
 	}
-	if cycles := findPackageCycles(edges); len(cycles) != 0 {
-		var groups []string
-		for _, cycle := range cycles {
-			var members []string
-			for _, pkg := range cycle {
-				members = append(members, pkg.Package)
-			}
-			groups = append(groups, "["+strings.Join(members, ", ")+"]")
-		}
-		return nil, fmt.Errorf("Java package cycles require shared Go storage or dispatch boundaries: %s", strings.Join(groups, ", "))
+	if err := program.emitPackageCycles(units, findPackageCycles(edges)); err != nil {
+		return nil, err
 	}
-	return units, nil
+	result := make([]EmittedPackage, 0, len(units))
+	for _, name := range slices.Sorted(maps.Keys(units)) {
+		result = append(result, units[name])
+	}
+	return result, nil
 }
 
 type emittedObjectPackage struct {
@@ -87,22 +83,25 @@ type emittedObjectPackage struct {
 func (program javaObjectProgram) emitPackage(name string) (emittedObjectPackage, error) {
 	program.pkg = name
 	program.imports = map[string]string{}
-	unit := emittedObjectPackage{EmittedPackage: EmittedPackage{Name: name}}
-
 	var source strings.Builder
 	for _, class := range program.layout {
-		if class.file.Package != name {
+		if class.storagePackage != name {
 			continue
 		}
 		if err := program.emitClass(&source, class); err != nil {
 			return emittedObjectPackage{}, err
 		}
 	}
+	return program.finishPackage(&source)
+}
+
+func (program *javaObjectProgram) finishPackage(source *strings.Builder) (emittedObjectPackage, error) {
+	unit := emittedObjectPackage{EmittedPackage: EmittedPackage{Name: program.pkg}}
 	var header strings.Builder
-	fmt.Fprintf(&header, "package %s\n", name)
+	fmt.Fprintf(&header, "package %s\n", program.pkg)
 	if program.runtime {
-		if name == "gpp.java" {
-			return emittedObjectPackage{}, fmt.Errorf("Java runtime import conflicts with source package %q", name)
+		if program.pkg == "gpp.java" {
+			return emittedObjectPackage{}, fmt.Errorf("Java runtime import conflicts with source package %q", program.pkg)
 		}
 		header.WriteString("\nimport javart \"gpp/java\"\n")
 	}
@@ -112,6 +111,16 @@ func (program javaObjectProgram) emitPackage(name string) (emittedObjectPackage,
 	}
 	unit.Source = header.String() + source.String()
 	return unit, nil
+}
+
+func (program *javaObjectProgram) classReference(class *javaObjectClass, name string) string {
+	if program.facadeOf != "" && class.file.Package == program.pkg {
+		return name
+	}
+	if class.storagePackage == program.pkg || class.storagePackage == program.facadeOf {
+		return program.qualify(class.storagePackage, class.storageName(name))
+	}
+	return program.qualify(class.file.Package, name)
 }
 
 func (program *javaObjectProgram) qualify(pkg, name string) string {
