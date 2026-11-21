@@ -33,6 +33,21 @@ go build -o ./hello .
 ```
 :::
 
+## Debug a native executable
+
+Build with `-debug` and open the executable in a Go-compatible debugger.
+The build keeps DWARF and original `.gpp` paths, disables Go inlining and
+optimization, and uses the default Go linker settings to retain symbols.
+
+```sh
+gpp build -debug -o ./hello .
+gdb ./hello
+```
+
+In GDB, use a source breakpoint such as `break main.gpp:12`, then use
+`run` and `info locals` to inspect the stopped program. Keep the original
+source files at the paths recorded when you built the executable.
+
 ## Keep generated files out of the way
 
 Project commands prepare generated Go in a stable, per-project directory under

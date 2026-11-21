@@ -373,7 +373,7 @@ func moduleCacheHit(output, key string) bool {
 	return err == nil && string(data) == key
 }
 
-func buildArtifactKey(inputKey, output, binaryPath, goIdentity string) (string, error) {
+func buildArtifactKey(inputKey, output, binaryPath, goIdentity string, backendFlags ...string) (string, error) {
 	h := sha256.New()
 	writeHashPart(h, "input="+inputKey)
 	writeHashPart(h, "binary="+filepath.Clean(binaryPath))
@@ -382,6 +382,9 @@ func buildArtifactKey(inputKey, output, binaryPath, goIdentity string) (string, 
 	writeHashPart(h, "GOARCH="+envOrDefault("GOARCH", runtime.GOARCH))
 	writeHashPart(h, "CGO_ENABLED="+os.Getenv("CGO_ENABLED"))
 	writeHashPart(h, "GOFLAGS="+os.Getenv("GOFLAGS"))
+	for _, flag := range backendFlags {
+		writeHashPart(h, "go-build-argument="+flag)
+	}
 	for _, name := range []string{"go.mod", "go.sum"} {
 		path := filepath.Join(output, name)
 		if _, err := os.Stat(path); err == nil {
