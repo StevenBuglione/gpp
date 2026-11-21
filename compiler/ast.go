@@ -303,6 +303,7 @@ func (declaration *ExtendDecl) Span() Span {
 type Field struct {
 	Name            string
 	IsConstant      bool
+	IsFinal         bool
 	TypeAST         TypeNode
 	InitializerAST  ExprNode
 	InitializerSpan Span

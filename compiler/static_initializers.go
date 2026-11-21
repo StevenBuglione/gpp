@@ -14,6 +14,7 @@ import (
 )
 
 const staticInitializerBody = "gppClassInitializer"
+const staticFinalInitializerPrefix = "__gppStaticFinalInit_"
 const classInitializationRuntimePath = "gpp/classinit"
 
 type staticInitializationContext struct {
@@ -150,12 +151,15 @@ func emitStaticInitialization(out *strings.Builder, class *ClassDecl, classes ma
 			continue
 		}
 		ref := staticFieldReference{owner: class, field: field}
-		storage := "__gppStaticField_" + class.Name + "_" + field.Name
+		storage := ref.storageName()
 		fieldType := transformPolymorphicType(fieldTypeSource(*field), context)
 		fmt.Fprintf(out, "var %s %s\n", storage, fieldType)
 		fmt.Fprintf(out, "func %s() %s { %s(); return %s }\n", ref.accessor("Get"), fieldType, guard, storage)
-		fmt.Fprintf(out, "func %s(value %s) { %s(); %s = value }\n", ref.accessor("Set"), fieldType, guard, storage)
-		fmt.Fprintf(out, "func %s() *%s { %s(); return &%s }\n\n", ref.accessor("Addr"), fieldType, guard, storage)
+		if !field.IsFinal {
+			fmt.Fprintf(out, "func %s(value %s) { %s(); %s = value }\n", ref.accessor("Set"), fieldType, guard, storage)
+			fmt.Fprintf(out, "func %s() *%s { %s(); return &%s }\n", ref.accessor("Addr"), fieldType, guard, storage)
+		}
+		out.WriteByte('\n')
 	}
 	if len(items) == 0 {
 		return nil
@@ -214,13 +218,20 @@ func validateStaticInitializers(class *ClassDecl, names map[string]bool) error {
 			return problem
 		}
 	}
-	return validateStaticFieldOrder(class)
+	if err := validateStaticFieldOrder(class); err != nil {
+		return err
+	}
+	return validateStaticFinalFields(class)
 }
 
 type staticFieldReference struct {
 	owner     *ClassDecl
 	field     *Field
 	qualifier string
+}
+
+func (ref staticFieldReference) storageName() string {
+	return "__gppStaticField_" + ref.owner.Name + "_" + ref.field.Name
 }
 
 func (ref staticFieldReference) accessor(operation string) string {
@@ -237,7 +248,11 @@ func (ref staticFieldReference) accessor(operation string) string {
 func resolveStaticField(receiver, name string, context constructorContext) (staticFieldReference, bool) {
 	target, exists := context.Targets[receiver]
 	if !exists {
-		if class, bound := strings.CutPrefix(receiver, staticFieldScopePrefix); bound {
+		class, bound := strings.CutPrefix(receiver, staticFieldScopePrefix)
+		if !bound {
+			class, bound = strings.CutPrefix(receiver, staticFinalInitializerPrefix)
+		}
+		if bound {
 			target, exists = context.Targets[class]
 		}
 	}
@@ -322,44 +337,80 @@ func rewriteStaticFields(body string, context constructorContext) (string, error
 		return true
 	})
 	address := map[*ast.SelectorExpr]bool{}
-	ast.Inspect(file, func(node ast.Node) bool {
-		switch value := node.(type) {
-		case *ast.AssignStmt:
-			if len(value.Lhs) == 1 && len(value.Rhs) == 1 && value.Tok == token.ASSIGN {
-				field, _ := ast.Unparen(value.Lhs[0]).(*ast.SelectorExpr)
-				if ref, ok := fields[field]; ok && !ref.field.IsConstant {
-					// Go evaluates the argument before entering the setter,
-					// matching putstatic after Java's RHS evaluation.
-					add(value.Lhs[0].Pos(), value.Rhs[0].Pos(), ref.accessor("Set")+"(")
-					add(value.Rhs[0].End(), value.Rhs[0].End(), ")")
-					delete(fields, field)
+	for _, declaration := range file.Decls {
+		function, _ := declaration.(*ast.FuncDecl)
+		var invalidWrite error
+		write := func(expression ast.Expr, assign bool) {
+			selector, _ := ast.Unparen(expression).(*ast.SelectorExpr)
+			ref, found := fields[selector]
+			if !found || !ref.field.IsFinal || invalidWrite != nil {
+				return
+			}
+			receiver := staticFieldQualifier(selector.X, file.Scope)
+			prefix := staticFieldScopePrefix
+			if ref.field.InitializerAST != nil {
+				prefix = staticFinalInitializerPrefix
+			}
+			initializer := staticMethodGoName(ref.owner, Method{Name: staticInitializerBody})
+			if assign && function != nil && function.Name.Name == initializer && ref.qualifier == "" && receiver == prefix+ref.owner.Name {
+				add(selector.Pos(), selector.End(), ref.storageName())
+				delete(fields, selector)
+				return
+			}
+			location := fset.Position(selector.Pos())
+			invalidWrite = diagnosticAt(location.Filename, Span{Line: location.Line, Column: location.Column},
+				fmt.Errorf("cannot modify static final field %s.%s", ref.owner.Name, ref.field.Name))
+		}
+		ast.Inspect(declaration, func(node ast.Node) bool {
+			if invalidWrite != nil {
+				return false
+			}
+			switch value := node.(type) {
+			case *ast.AssignStmt:
+				if len(value.Lhs) == 1 && len(value.Rhs) == 1 && value.Tok == token.ASSIGN {
+					field, _ := ast.Unparen(value.Lhs[0]).(*ast.SelectorExpr)
+					if ref, ok := fields[field]; ok && !ref.field.IsConstant && !ref.field.IsFinal {
+						// Go evaluates the argument before entering the setter,
+						// matching putstatic after Java's RHS evaluation.
+						add(value.Lhs[0].Pos(), value.Rhs[0].Pos(), ref.accessor("Set")+"(")
+						add(value.Rhs[0].End(), value.Rhs[0].End(), ")")
+						delete(fields, field)
+					}
 				}
-			}
-			for _, lhs := range value.Lhs {
-				markStaticFieldAddress(lhs, address)
-			}
-		case *ast.IncDecStmt:
-			markStaticFieldAddress(value.X, address)
-		case *ast.RangeStmt:
-			markStaticFieldAddress(value.Key, address)
-			markStaticFieldAddress(value.Value, address)
-		case *ast.UnaryExpr:
-			if value.Op == token.AND {
+				for _, lhs := range value.Lhs {
+					write(lhs, value.Tok == token.ASSIGN)
+					markStaticFieldAddress(lhs, address)
+				}
+			case *ast.IncDecStmt:
+				write(value.X, false)
+				markStaticFieldAddress(value.X, address)
+			case *ast.RangeStmt:
+				write(value.Key, false)
+				write(value.Value, false)
+				markStaticFieldAddress(value.Key, address)
+				markStaticFieldAddress(value.Value, address)
+			case *ast.UnaryExpr:
+				if value.Op == token.AND {
+					write(value.X, false)
+					markStaticFieldAddress(value.X, address)
+				}
+			case *ast.SelectorExpr:
+				// Preserve addressability of struct members and method receivers.
+				markStaticFieldAddress(value.X, address)
+			case *ast.IndexExpr:
 				markStaticFieldAddress(value.X, address)
 			}
-		case *ast.SelectorExpr:
-			// Preserve addressability of struct members and method receivers.
-			markStaticFieldAddress(value.X, address)
-		case *ast.IndexExpr:
-			markStaticFieldAddress(value.X, address)
+			return true
+		})
+		if invalidWrite != nil {
+			return "", invalidWrite
 		}
-		return true
-	})
+	}
 	for selector, ref := range fields {
 		access := ref.accessor("Get") + "()"
 		if ref.field.IsConstant {
 			access = ref.constantName()
-		} else if address[selector] {
+		} else if address[selector] && !ref.field.IsFinal {
 			access = "(*" + ref.accessor("Addr") + "())"
 		}
 		add(selector.Pos(), selector.End(), access)

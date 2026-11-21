@@ -11,12 +11,13 @@ import (
 const staticFieldScopePrefix = "__gppStaticScope_"
 
 type fieldLocalScope struct {
-	parent *fieldLocalScope
-	names  map[string]bool
+	parent  *fieldLocalScope
+	names   map[string]bool
+	closure bool
 }
 
 func newFieldLocalScope(parent *fieldLocalScope) *fieldLocalScope {
-	return &fieldLocalScope{parent: parent, names: map[string]bool{}}
+	return &fieldLocalScope{parent: parent, names: map[string]bool{}, closure: parent != nil && parent.closure}
 }
 
 func (scope *fieldLocalScope) contains(name string) bool {
@@ -29,9 +30,11 @@ func (scope *fieldLocalScope) contains(name string) bool {
 }
 
 type classFieldUse struct {
-	name   *NameExpr
-	write  bool // bare destination of an ordinary assignment
-	callee bool
+	name      *NameExpr
+	qualifier string
+	write     bool // bare destination of an ordinary assignment
+	callee    bool
+	closure   bool
 }
 
 type classFieldVisitor func(classFieldUse)
@@ -142,7 +145,7 @@ func (visit classFieldVisitor) expression(expr ExprNode, scope *fieldLocalScope,
 	switch node := expr.(type) {
 	case *NameExpr:
 		if node.Name != "_" && !scope.contains(node.Name) {
-			visit(classFieldUse{name: node, write: write})
+			visit(classFieldUse{name: node, write: write, closure: scope.closure})
 		}
 	case *UnaryExpr:
 		child(node.Operand)
@@ -152,6 +155,11 @@ func (visit classFieldVisitor) expression(expr ExprNode, scope *fieldLocalScope,
 	case *AssignmentExpr:
 		visit.assignment(node.Left, node.Right, node.Operator, scope)
 	case *SelectorExpr:
+		if write {
+			if receiver, ok := node.Receiver.(*NameExpr); ok && !scope.contains(receiver.Name) {
+				visit(classFieldUse{name: &NameExpr{Name: node.Name, SpanValue: node.Span()}, qualifier: receiver.Name, write: true, closure: scope.closure})
+			}
+		}
 		child(node.Receiver)
 	case *IndexExpr:
 		child(node.Receiver)
@@ -179,7 +187,7 @@ func (visit classFieldVisitor) expression(expr ExprNode, scope *fieldLocalScope,
 		visit.expression(node.Inner, scope, write)
 	case *CallExpr:
 		if name := simpleCallName(node.Callee); name != nil && !scope.contains(name.Name) {
-			visit(classFieldUse{name: name, callee: true})
+			visit(classFieldUse{name: name, callee: true, closure: scope.closure})
 			switch callee := node.Callee.(type) {
 			case *IndexExpr:
 				child(callee.Index)
@@ -212,12 +220,14 @@ func (visit classFieldVisitor) expression(expr ExprNode, scope *fieldLocalScope,
 		}
 	case *LambdaExpr:
 		nested := newFieldLocalScope(scope)
+		nested.closure = true
 		parameters, _ := lambdaParametersFromTokens(node.Parameters)
 		bindFieldLocals(nested, parameters)
 		visit.expression(node.Body, nested, false)
 		visit.block(node.BlockBody, nested)
 	case *FunctionLiteralExpr:
 		nested := newFieldLocalScope(scope)
+		nested.closure = true
 		if node.Type != nil {
 			bindFieldLocals(nested, node.Type.Parameters)
 		}
@@ -257,7 +267,7 @@ func validateStaticFieldOrder(class *ClassDecl) error {
 		var problem error
 		visit := classFieldVisitor(func(use classFieldUse) {
 			field, exists := declared[use.name.Name]
-			if problem != nil || !exists || field.Span().Start < item.span.Start || use.write ||
+			if problem != nil || !exists || use.qualifier != "" || field.Span().Start < item.span.Start || use.write ||
 				(use.callee && !isFunctionType(field.TypeAST)) {
 				return
 			}
@@ -312,6 +322,9 @@ func bindImplicitClassMembers(method Method, class *ClassDecl, context construct
 	locations := map[int]string{}
 	fields := map[string]*Field{}
 	visit := classFieldVisitor(func(use classFieldUse) {
+		if use.qualifier != "" {
+			return
+		}
 		name := use.name.Name
 		position := use.name.Span().Start - method.BodySpan.Start
 		if position < 0 || position+len(name) > len(source) || source[position:position+len(name)] != name {

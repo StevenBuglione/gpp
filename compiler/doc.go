@@ -223,6 +223,8 @@ func documentationSymbols(packageName string, declaration Decl) []DocSymbol {
 			signature := "static "
 			if field.IsConstant {
 				signature += "const "
+			} else if field.IsFinal {
+				signature += "final "
 			}
 			signature += field.Name + " " + fieldTypeSource(field)
 			symbol.StaticFields = append(symbol.StaticFields, DocSymbol{

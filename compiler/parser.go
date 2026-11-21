@@ -1231,11 +1231,16 @@ func parseClassBody(class *ClassDecl, body string, sourceBase int, fullSource st
 			}
 		}
 		constant := static && keywordAt(body, pos, "const")
-		if constant {
-			constantSpan := sourceSpan(fullSource, sourceBase+pos, sourceBase+pos+len("const"))
-			pos = skipSpace(body, pos+len("const"))
+		final := static && staticFinalModifierAt(body, tokens, pos)
+		if constant || final {
+			modifier := "const"
+			if final {
+				modifier = "final"
+			}
+			span := sourceSpan(fullSource, sourceBase+pos, sourceBase+pos+len(modifier))
+			pos = skipSpace(body, pos+len(modifier))
 			if pos == len(body) || body[pos] == '{' || keywordAt(body, pos, "func") {
-				return diagnosticAt(class.SourceFile, constantSpan, fmt.Errorf("static const requires a field declaration"))
+				return diagnosticAt(class.SourceFile, span, fmt.Errorf("static %s requires a field declaration", modifier))
 			}
 		}
 		if body[pos] == '{' {
@@ -1292,6 +1297,7 @@ func parseClassBody(class *ClassDecl, body string, sourceBase int, fullSource st
 			}
 			field.Doc = doc
 			field.IsConstant = constant
+			field.IsFinal = final
 			fieldStart := sourceBase + pos
 			fieldLine, fieldColumn := sourcePosition(fullSource, fieldStart)
 			field.SpanValue = Span{Start: fieldStart, End: sourceBase + end, Line: fieldLine, Column: fieldColumn}
@@ -1316,6 +1322,21 @@ func parseClassBody(class *ClassDecl, body string, sourceBase int, fullSource st
 	}
 
 	return nil
+}
+
+func staticFinalModifierAt(body string, tokens []Token, pos int) bool {
+	if !keywordAt(body, pos, "final") {
+		return false
+	}
+	start := skipSpace(body, pos+len("final"))
+	end, _ := classFieldEnd(tokens, start, len(body))
+	name, length := readIdent(body[start:end])
+	if !token.IsIdentifier(name) {
+		return false
+	}
+	typeStart := skipSpace(body, start+length)
+	// Distinguish the contextual modifier from an existing field named final.
+	return typeStart > start+length && typeStart < end && body[typeStart] != '=' && body[typeStart] != '@'
 }
 
 func classFieldEnd(tokens []Token, start, end int) (int, int) {

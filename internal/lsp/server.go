@@ -6958,6 +6958,7 @@ func declarationLineMatches(line string, symbol compiler.DocSymbol) bool {
 		if symbol.StaticField {
 			trimmed = strings.TrimSpace(strings.TrimPrefix(trimmed, "static "))
 			trimmed = strings.TrimSpace(strings.TrimPrefix(trimmed, "const "))
+			trimmed = strings.TrimSpace(strings.TrimPrefix(trimmed, "final "))
 		}
 		return identifierAtLineStart(trimmed, symbol.Name)
 	}

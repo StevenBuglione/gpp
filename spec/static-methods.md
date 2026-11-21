@@ -650,9 +650,38 @@ through a subclass or after an initializer has failed. Go can use exported
 class constants as ordinary typed constants, for example
 `GppConst_Defaults_Port`.
 
-Runtime-initialized final fields, Java-specific constant folding, interface
-initialization, and static field annotation metadata require additional
-compatibility work.
+## Runtime-initialized final fields
+
+Use `static final Name Type = expression` for a field whose value is computed
+during class initialization. A declaration without an initializer is a blank
+final. Assign it by simple name in a static initializer of the declaring class.
+Every path that completes class initialization must assign each blank final
+exactly once. The compiler checks reads and assignments across branches,
+loops, switch cases, and exception handling.
+
+```go
+class Settings {
+    static final Address string = ReadEnvironment("SERVER_ADDRESS")
+    static final Port int
+    static {
+        if IsDevelopment() {
+            Port = 8080
+        } else {
+            Port = 443
+        }
+    }
+}
+```
+
+A final field has the usual typed Go getter, such as
+`GppGetStatic_Settings_Address`. Reading it initializes its declaring class.
+The field is read-only after initialization. A caller can still use or mutate
+the object held by a final reference according to its type.
+
+The `static const` syntax covers compile-time constants. The `static final`
+syntax always uses runtime initialization. Java-specific constant folding,
+labeled flow in blank-final analysis, interface initialization, and static
+field annotation metadata remain open.
 
 ---
 

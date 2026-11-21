@@ -103,7 +103,11 @@ func buildClassInitializerMethod(class *ClassDecl, items []instanceInitializer, 
 		span := item.span
 		if item.field != nil {
 			span = item.field.InitializerSpan
-			fmt.Fprintf(&body, "%s.%s =", receiver, item.field.Name)
+			target := receiver
+			if static && item.field.IsFinal {
+				target = staticFinalInitializerPrefix + class.Name
+			}
+			fmt.Fprintf(&body, "%s.%s =", target, item.field.Name)
 			for line < span.Line {
 				body.WriteByte('\n')
 				line++
